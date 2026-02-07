@@ -1,6 +1,7 @@
 const std = @import("std");
 const Io = std.Io;
 const Atomic = std.atomic.Value;
+const builtin = @import("builtin");
 const common = @import("common");
 const cfg = @import("config.zig");
 
@@ -264,28 +265,44 @@ fn runReadLoop(
     while (!ctx.stop.load(.acquire)) {
         iter += 1;
         pingTick(ping_ctx, ctx);
-        const timeout: Io.Timeout = .{ .duration = .{ .raw = Io.Duration.fromMilliseconds(cfg.poll_timeout_ms), .clock = .real } };
-
-        const message = stream.socket.receiveTimeout(ctx.io, &recv_buffer, timeout) catch |err| switch (err) {
-            error.Timeout => {
-                pingTick(ping_ctx, ctx);
-                if (cfg.trace_network and cfg.trace_network_timeouts and (iter % 1000 == 0)) {
-                    std.log.debug("network: timeout host={s} port={} iter={}", .{ ctx.host, ctx.port, iter });
-                }
-                continue;
-            },
-            error.Canceled => return error.Canceled,
-            error.ConnectionResetByPeer,
-            error.SocketUnconnected,
-            error.NetworkDown,
-            => return .disconnected,
-            else => {
-                std.log.warn("client: receive error from {s}:{}: {}", .{ ctx.host, ctx.port, err });
-                return .disconnected;
-            },
+        const chunk = if (builtin.os.tag == .windows) blk: {
+            var bufs: [1][]u8 = .{recv_buffer[0..]};
+            const n = ctx.io.vtable.netRead(ctx.io.userdata, stream.socket.handle, bufs[0..]) catch |err| switch (err) {
+                error.Canceled => return error.Canceled,
+                error.ConnectionResetByPeer,
+                error.SocketUnconnected,
+                error.NetworkDown,
+                => return .disconnected,
+                else => {
+                    std.log.warn("client: receive error from {s}:{}: {}", .{ ctx.host, ctx.port, err });
+                    return .disconnected;
+                },
+            };
+            break :blk recv_buffer[0..n];
+        } else blk: {
+            const timeout: Io.Timeout = .{ .duration = .{ .raw = Io.Duration.fromMilliseconds(cfg.poll_timeout_ms), .clock = .real } };
+            const message = stream.socket.receiveTimeout(ctx.io, &recv_buffer, timeout) catch |err| switch (err) {
+                error.Timeout => {
+                    pingTick(ping_ctx, ctx);
+                    if (cfg.trace_network and cfg.trace_network_timeouts and (iter % 1000 == 0)) {
+                        std.log.debug("network: timeout host={s} port={} iter={}", .{ ctx.host, ctx.port, iter });
+                    }
+                    continue;
+                },
+                error.Canceled => return error.Canceled,
+                error.ConnectionResetByPeer,
+                error.SocketUnconnected,
+                error.NetworkDown,
+                => return .disconnected,
+                else => {
+                    std.log.warn("client: receive error from {s}:{}: {}", .{ ctx.host, ctx.port, err });
+                    return .disconnected;
+                },
+            };
+            break :blk message.data;
         };
 
-        if (message.data.len == 0) {
+        if (chunk.len == 0) {
             if (cfg.trace_network) {
                 std.log.warn("network: zero-length read host={s} port={} -> disconnected", .{ ctx.host, ctx.port });
             }
@@ -293,15 +310,15 @@ fn runReadLoop(
         }
 
         if (cfg.trace_network) {
-            std.log.debug("network: recv host={s} port={} bytes={}", .{ ctx.host, ctx.port, message.data.len });
+            std.log.debug("network: recv host={s} port={} bytes={}", .{ ctx.host, ctx.port, chunk.len });
             if (cfg.trace_network_payloads) {
-                const preview_len = @min(message.data.len, 120);
-                std.log.debug("network: payload preview='{s}'", .{message.data[0..preview_len]});
+                const preview_len = @min(chunk.len, 120);
+                std.log.debug("network: payload preview='{s}'", .{chunk[0..preview_len]});
             }
         }
 
-        incrementRxBytes(ctx.shared, ctx.io, message.data.len);
-        feedParser(parser, message.data, ctx, parse_arena);
+        incrementRxBytes(ctx.shared, ctx.io, chunk.len);
+        feedParser(parser, chunk, ctx, parse_arena);
     }
 
     return .stopped;
@@ -484,7 +501,7 @@ const PingContext = struct {
     }
 
     fn init(io: Io, base_addr: Io.net.IpAddress, ping_port: u16) !PingContext {
-        if (!cfg.ping.enabled) return .{};
+        if (!cfg.ping.enabled or builtin.os.tag == .windows) return .{};
         var dest = base_addr;
         switch (dest) {
             .ip4 => |*a| a.port = ping_port,
