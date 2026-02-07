@@ -4,38 +4,55 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    const common = b.createModule(.{
+    const common_mod = b.createModule(.{
         .root_source_file = b.path("src/common.zig"),
         .target = target,
+        .optimize = optimize,
+        .imports = &.{},
     });
 
-    const h = b.createModule(.{
+    const generator_mod = b.createModule(.{
+        .root_source_file = b.path("src/generator.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "common", .module = common_mod },
+        },
+    });
+
+    const host_mod = b.createModule(.{
         .root_source_file = b.path("src/host.zig"),
         .target = target,
         .optimize = optimize,
         .imports = &.{
-            .{ .name = "common", .module = common },
+            .{ .name = "common", .module = common_mod },
         },
     });
 
-    const c = b.createModule(.{
+    const client_mod = b.createModule(.{
         .root_source_file = b.path("src/client.zig"),
         .target = target,
         .optimize = optimize,
         .imports = &.{
-            .{ .name = "common", .module = common },
+            .{ .name = "common", .module = common_mod },
         },
     });
 
+    const generator = b.addExecutable(.{
+        .name = "generator",
+        .root_module = generator_mod,
+    });
+    b.installArtifact(generator);
+
     const client = b.addExecutable(.{
         .name = "client",
-        .root_module = c,
+        .root_module = client_mod,
     });
     b.installArtifact(client);
 
     const host = b.addExecutable(.{
         .name = "host",
-        .root_module = h,
+        .root_module = host_mod,
     });
     b.installArtifact(host);
 
@@ -61,33 +78,50 @@ pub fn build(b: *std.Build) void {
         run_client_cmd.addArgs(args);
     }
 
-    const mod_tests = b.addTest(.{
-        .root_module = common,
+    const common_mod_tests = b.addTest(.{
+        .root_module = common_mod,
     });
 
-    const run_mod_tests = b.addRunArtifact(mod_tests);
-
-    const exe_tests = b.addTest(.{
-        .root_module = host.root_module,
+    const generator_mod_tests = b.addTest(.{
+        .root_module = generator_mod,
     });
 
-    const run_exe_tests = b.addRunArtifact(exe_tests);
+    const host_mod_tests = b.addTest(.{
+        .root_module = host_mod,
+    });
+
+    const client_mod_tests = b.addTest(.{
+        .root_module = client_mod,
+    });
+
+    const run_common_mod_tests = b.addRunArtifact(common_mod_tests);
+    const run_generator_mod_tests = b.addRunArtifact(generator_mod_tests);
+    const run_host_mod_tests = b.addRunArtifact(host_mod_tests);
+    const run_client_mod_tests = b.addRunArtifact(client_mod_tests);
 
     const test_step = b.step("test", "Run tests");
-    test_step.dependOn(&run_mod_tests.step);
-    test_step.dependOn(&run_exe_tests.step);
+    test_step.dependOn(&run_common_mod_tests.step);
+    test_step.dependOn(&run_host_mod_tests.step);
+    test_step.dependOn(&run_client_mod_tests.step);
+    test_step.dependOn(&run_generator_mod_tests.step);
+
+    const generator_check = b.addExecutable(.{
+        .name = "generator",
+        .root_module = generator_mod,
+    });
 
     const host_check = b.addExecutable(.{
         .name = "host",
-        .root_module = h,
+        .root_module = host_mod,
     });
 
     const client_check = b.addExecutable(.{
         .name = "client",
-        .root_module = h,
+        .root_module = client_mod,
     });
 
     const check_step = b.step("check", "Run checks");
     check_step.dependOn(&host_check.step);
     check_step.dependOn(&client_check.step);
+    check_step.dependOn(&generator_check.step);
 }
