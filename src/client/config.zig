@@ -123,6 +123,17 @@ pub const renderer = struct {
     pub const scene_ref_z = color(86, 166, 245, 255);
     pub const trace_gyro_norm = color(230, 126, 247, 255);
     pub const delta_trace = color(230, 230, 230, 255);
+
+    pub const pause_key: rl.KeyboardKey = .p;
+    pub const zoom_step: f64 = 0.12;
+    pub const zoom_min_window_seconds: f64 = 1.0;
+    pub const zoom_max_window_seconds: f64 = 300.0;
+    pub const control_button_size: f32 = 16.0;
+    pub const control_button_padding: f32 = 6.0;
+    pub const control_button_text_size: i32 = 12;
+    pub const control_button_fill = color(22, 28, 38, 255);
+    pub const control_button_border = color(84, 96, 118, 255);
+    pub const control_button_text = color(224, 232, 244, 255);
 };
 
 pub const ui = struct {
