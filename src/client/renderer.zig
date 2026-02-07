@@ -22,6 +22,14 @@ const FocusTarget = union(enum) {
 };
 
 pub const Renderer = struct {
+    pub const DrawStats = struct {
+        total_ms: f32 = 0.0,
+        prepare_ms: f32 = 0.0,
+        title_ms: f32 = 0.0,
+        scenes_ms: f32 = 0.0,
+        plots_ms: f32 = 0.0,
+    };
+
     scenes: [cfg.max_hosts]scene3d.SceneTarget = [_]scene3d.SceneTarget{.{}} ** cfg.max_hosts,
     shared_cursor: cursor.SharedCursor = .{},
     root_layout_options: ui.RootLayoutOptions = .{},
@@ -39,6 +47,10 @@ pub const Renderer = struct {
         .reconnects = 0,
         .partial_disconnects = 0,
         .connect_failures = 0,
+        .rx_bytes_total = 0,
+        .ping_rtt_ms = -1.0,
+        .ping_sent = 0,
+        .ping_timeouts = 0,
     }} ** cfg.max_hosts,
     paused_titles: [cfg.max_hosts][]const u8 = [_][]const u8{""} ** cfg.max_hosts,
 
@@ -49,11 +61,14 @@ pub const Renderer = struct {
         for (&self.scenes) |*scene| scene.deinit();
     }
 
-    pub fn draw(self: *Renderer, devices: []const DeviceFrame, options: options_mod.RuntimeOptions) void {
+    pub fn draw(self: *Renderer, devices: []const DeviceFrame, options: options_mod.RuntimeOptions) DrawStats {
+        const t0 = nowMs();
+        var stats: DrawStats = .{};
         const screen_w = rl.getScreenWidth();
         const screen_h = rl.getScreenHeight();
         const live_count = @min(devices.len, self.scenes.len);
 
+        const t_prepare0 = nowMs();
         const root = ui.computeRootLayout(screen_w, screen_h, self.root_layout_options);
         const cmp = ui.splitComparison(root.body, root.scale, live_count, self.comparison_layout_options);
 
@@ -62,45 +77,60 @@ pub const Renderer = struct {
 
         var render_frames_buffer: [cfg.max_hosts]DeviceFrame = undefined;
         const render_frames = self.selectRenderFrames(devices[0..live_count], &render_frames_buffer);
+        stats.prepare_ms = @floatCast(nowMs() - t_prepare0);
 
+        const t_title0 = nowMs();
         rl.clearBackground(cfg.theme.background);
         drawTitleBar(root.title, render_frames.len, options.show_fps, self.paused, self.x_window_seconds);
+        stats.title_ms = @floatCast(nowMs() - t_title0);
 
         if (self.maximized) |focus| {
             switch (focus) {
                 .scene => |idx| {
                     if (idx < render_frames.len) {
+                        const t_scene0 = nowMs();
                         drawSceneCard(&self.scenes[idx], root.body, root.scale, render_frames[idx], options);
+                        stats.scenes_ms = @floatCast(nowMs() - t_scene0);
                         const button = drawWindowButton(root.body, true);
                         if (isClicked(button)) self.maximized = null;
-                        return;
+                        stats.total_ms = @floatCast(nowMs() - t0);
+                        return stats;
                     }
                 },
                 .plot => |idx| {
                     if (idx < cfg.ui.chart_count) {
+                        const t_plot0 = nowMs();
                         self.updateCursorForRect(root.body);
                         drawOnePlot(root.body, idx, render_frames, self.shared_cursor, options, self.x_window_seconds);
+                        stats.plots_ms = @floatCast(nowMs() - t_plot0);
                         const button = drawWindowButton(root.body, true);
                         if (isClicked(button)) self.maximized = null;
-                        return;
+                        stats.total_ms = @floatCast(nowMs() - t0);
+                        return stats;
                     }
                 },
             }
             self.maximized = null;
         }
 
+        const t_scenes0 = nowMs();
         for (render_frames, 0..) |frame, i| {
             drawSceneCard(&self.scenes[i], cmp.scenes[i], root.scale, frame, options);
             const button = drawWindowButton(cmp.scenes[i], false);
             if (isClicked(button)) self.maximized = .{ .scene = i };
         }
+        stats.scenes_ms = @floatCast(nowMs() - t_scenes0);
 
+        const t_plots0 = nowMs();
         self.shared_cursor.update(cmp.plots);
         drawSharedPlots(cmp.plots, render_frames, self.shared_cursor, options, self.x_window_seconds);
         for (cmp.plots, 0..) |rect, i| {
             const button = drawWindowButton(rect, false);
             if (isClicked(button)) self.maximized = .{ .plot = i };
         }
+        stats.plots_ms = @floatCast(nowMs() - t_plots0);
+        stats.total_ms = @floatCast(nowMs() - t0);
+        return stats;
     }
 
     fn handlePauseInput(self: *Renderer, title_rect: rl.Rectangle, live_frames: []const DeviceFrame) void {
@@ -192,7 +222,7 @@ fn drawTitleBar(title_rect: rl.Rectangle, device_count: usize, show_fps: bool, p
     drawTextFmt(
         "Window:{d:.1}s {s}",
         .{ window_seconds, if (paused) "PAUSED" else "LIVE" },
-        @intFromFloat(title_rect.x + title_rect.width * 0.35),
+        @intFromFloat(title_rect.x + title_rect.width * cfg.renderer.title_status_x_ratio),
         @intFromFloat(title_rect.y + 6.0),
         cfg.renderer.status_text_size,
         if (paused) cfg.renderer.status_connecting else cfg.theme.text_secondary,
@@ -206,14 +236,20 @@ fn drawPauseButton(title_rect: rl.Rectangle, paused: bool) void {
     const rect = pauseButtonRect(title_rect);
     rl.drawRectangleRec(rect, cfg.renderer.control_button_fill);
     rl.drawRectangleLinesEx(rect, 1.0, cfg.renderer.control_button_border);
-    rl.drawText(if (paused) "R" else "P", @intFromFloat(rect.x + 4.0), @intFromFloat(rect.y + 2.0), cfg.renderer.control_button_text_size, cfg.renderer.control_button_text);
+    rl.drawText(
+        if (paused) "R" else "P",
+        @intFromFloat(rect.x + cfg.renderer.control_button_text_x_offset),
+        @intFromFloat(rect.y + cfg.renderer.control_button_text_y_offset),
+        cfg.renderer.control_button_text_size,
+        cfg.renderer.control_button_text,
+    );
 }
 
 fn pauseButtonRect(title_rect: rl.Rectangle) rl.Rectangle {
     const size = cfg.renderer.control_button_size;
     const pad = cfg.renderer.control_button_padding;
     return .{
-        .x = title_rect.x + title_rect.width - pad - size - 70.0,
+        .x = title_rect.x + title_rect.width - pad - size - cfg.renderer.pause_button_fps_reserve,
         .y = title_rect.y + pad,
         .width = size,
         .height = size,
@@ -393,7 +429,13 @@ fn drawWindowButton(rect: rl.Rectangle, active: bool) rl.Rectangle {
     };
     rl.drawRectangleRec(btn, cfg.renderer.control_button_fill);
     rl.drawRectangleLinesEx(btn, 1.0, cfg.renderer.control_button_border);
-    rl.drawText(if (active) "x" else "+", @intFromFloat(btn.x + 4.0), @intFromFloat(btn.y + 2.0), cfg.renderer.control_button_text_size, cfg.renderer.control_button_text);
+    rl.drawText(
+        if (active) "x" else "+",
+        @intFromFloat(btn.x + cfg.renderer.control_button_text_x_offset),
+        @intFromFloat(btn.y + cfg.renderer.control_button_text_y_offset),
+        cfg.renderer.control_button_text_size,
+        cfg.renderer.control_button_text,
+    );
     return btn;
 }
 
@@ -453,4 +495,8 @@ fn isClicked(rect: rl.Rectangle) bool {
 
 fn pointInRect(p: rl.Vector2, rect: rl.Rectangle) bool {
     return p.x >= rect.x and p.x <= rect.x + rect.width and p.y >= rect.y and p.y <= rect.y + rect.height;
+}
+
+fn nowMs() f64 {
+    return rl.getTime() * 1000.0;
 }

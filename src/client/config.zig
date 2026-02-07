@@ -11,6 +11,13 @@ pub const reconnect_ms: i64 = 2000;
 pub const poll_timeout_ms: i32 = 4;
 pub const max_line_bytes: usize = 8192;
 pub const recv_buffer_bytes: usize = 2048;
+pub const ping = struct {
+    pub const enabled: bool = true;
+    pub const port_offset: u16 = 1;
+    pub const interval_ms: i64 = 1000;
+    pub const timeout_ms: i64 = 250;
+    pub const magic: u32 = 0x50494E47; // "PING"
+};
 
 pub const render_debug_interval_ms: i64 = 1000;
 pub const trace_client_main: bool = true;
@@ -131,6 +138,10 @@ pub const renderer = struct {
     pub const control_button_size: f32 = 16.0;
     pub const control_button_padding: f32 = 6.0;
     pub const control_button_text_size: i32 = 12;
+    pub const control_button_text_x_offset: f32 = 4.0;
+    pub const control_button_text_y_offset: f32 = 2.0;
+    pub const title_status_x_ratio: f32 = 0.35;
+    pub const pause_button_fps_reserve: f32 = 70.0;
     pub const control_button_fill = color(22, 28, 38, 255);
     pub const control_button_border = color(84, 96, 118, 255);
     pub const control_button_text = color(224, 232, 244, 255);
@@ -167,16 +178,20 @@ pub const ui = struct {
 };
 
 pub const options_menu = struct {
-    pub const toggle_key: rl.KeyboardKey = .f1;
-    pub const up_key: rl.KeyboardKey = .up;
-    pub const down_key: rl.KeyboardKey = .down;
-    pub const left_key: rl.KeyboardKey = .left;
-    pub const right_key: rl.KeyboardKey = .right;
+    pub const toggle_key: rl.KeyboardKey = .semicolon;
+    pub const mode_normal_key: rl.KeyboardKey = .escape;
+    pub const mode_insert_key: rl.KeyboardKey = .i;
+    pub const nav_up_key: rl.KeyboardKey = .k;
+    pub const nav_down_key: rl.KeyboardKey = .j;
+    pub const decrement_key: rl.KeyboardKey = .h;
+    pub const increment_key: rl.KeyboardKey = .l;
     pub const panel_width: f32 = 430.0;
     pub const panel_max_height_ratio: f32 = 0.80;
     pub const panel_margin: f32 = 16.0;
     pub const panel_padding: f32 = 10.0;
     pub const panel_line_gap: f32 = 18.0;
+    pub const panel_title_gap: f32 = 6.0;
+    pub const scalar_mouse_split_ratio: f32 = 0.60;
     pub const title_size: i32 = 18;
     pub const item_size: i32 = 14;
 };
@@ -185,6 +200,46 @@ pub const settings = struct {
     pub const file_name: []const u8 = "settings.json";
     pub const max_file_bytes: usize = 64 * 1024;
     pub const autosave_interval_ms: i64 = 1000;
+};
+
+pub const profiler = struct {
+    pub const toggle_key: rl.KeyboardKey = .d;
+    pub const smoothing_alpha: f32 = 0.30;
+    pub const panel_width: f32 = 430.0;
+    pub const panel_x: f32 = 12.0;
+    pub const panel_y: f32 = 44.0;
+    pub const panel_padding: f32 = 8.0;
+    pub const panel_line_gap: f32 = 14.0;
+    pub const graph_height: f32 = 72.0;
+    pub const timing_graph_height: f32 = 120.0;
+    pub const graph_top_gap: f32 = 8.0;
+    pub const memory_poll_interval_ms: f64 = 250.0;
+    pub const memory_samples: usize = 180;
+    pub const panel_title_size: i32 = 14;
+    pub const panel_text_size: i32 = 12;
+    pub const good_ratio: f32 = 0.40;
+    pub const warn_ratio: f32 = 0.75;
+    pub const panel_fill = color(10, 13, 18, 220);
+    pub const panel_border = color(58, 63, 76, 255);
+    pub const text_muted = color(188, 196, 212, 255);
+    pub const text_good = color(80, 214, 124, 255);
+    pub const text_warn = color(247, 196, 80, 255);
+    pub const text_bad = color(235, 94, 94, 255);
+    pub const graph_border = color(73, 80, 96, 255);
+    pub const graph_line = color(86, 166, 245, 255);
+    pub const graph_fill = color(20, 27, 38, 170);
+    pub const network_graph_height: f32 = 72.0;
+    pub const network_graph_gap: f32 = 6.0;
+    pub const network_line_dev1 = color(80, 214, 124, 255);
+    pub const network_line_dev2 = color(247, 196, 80, 255);
+    pub const latency_line_dev1 = color(86, 166, 245, 255);
+    pub const latency_line_dev2 = color(230, 126, 247, 255);
+    pub const frame_line = color(235, 94, 94, 255);
+    pub const input_line = color(247, 196, 80, 255);
+    pub const drain_line = color(86, 166, 245, 255);
+    pub const renderer_line = color(230, 126, 247, 255);
+    pub const menu_line = color(80, 214, 124, 255);
+    pub const budget_line = color(210, 210, 210, 170);
 };
 
 pub const scene3d = struct {

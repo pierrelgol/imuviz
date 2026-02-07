@@ -51,6 +51,7 @@ pub const History = struct {
     };
 
     pub fn init(options: Options) History {
+        std.debug.assert(options.window_seconds >= 0.0);
         return .{ .options = options };
     }
 
@@ -59,6 +60,8 @@ pub const History = struct {
     }
 
     pub fn appendReport(self: *History, report: common.Report) void {
+        std.debug.assert(self.len <= cfg.max_history);
+        std.debug.assert(self.head < cfg.max_history);
         const t = timestampToSeconds(report.sample.timestamp);
         const gx = @as(f32, @floatFromInt(report.sample.gyro_x));
         const gy = @as(f32, @floatFromInt(report.sample.gyro_y));
@@ -83,6 +86,8 @@ pub const History = struct {
         self.bearing[insert_index] = @floatFromInt(report.bearing);
 
         self.trimToWindow();
+        std.debug.assert(self.len <= cfg.max_history);
+        std.debug.assert(self.head < cfg.max_history);
     }
 
     pub fn index(self: *const History, logical_index: usize) usize {

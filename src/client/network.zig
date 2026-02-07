@@ -22,6 +22,10 @@ pub const EndpointSnapshot = struct {
     reconnects: u64,
     partial_disconnects: u64,
     connect_failures: u64,
+    rx_bytes_total: u64,
+    ping_rtt_ms: f32,
+    ping_sent: u64,
+    ping_timeouts: u64,
 };
 
 const EndpointShared = struct {
@@ -34,6 +38,10 @@ const EndpointShared = struct {
     reconnects: u64 = 0,
     partial_disconnects: u64 = 0,
     connect_failures: u64 = 0,
+    rx_bytes_total: u64 = 0,
+    ping_rtt_ms: f32 = -1.0,
+    ping_sent: u64 = 0,
+    ping_timeouts: u64 = 0,
 
     fn init(self: *EndpointShared) void {
         self.* = .{};
@@ -144,12 +152,14 @@ pub const ClientNetwork = struct {
     }
 
     pub fn drain(self: *ClientNetwork, endpoint_index: usize, out: []common.Report) usize {
+        std.debug.assert(endpoint_index < self.endpoint_count);
         return self.endpoints[endpoint_index].queue.getUncancelable(self.io, out, 0) catch |err| switch (err) {
             error.Closed => 0,
         };
     }
 
     pub fn snapshot(self: *ClientNetwork, endpoint_index: usize) EndpointSnapshot {
+        std.debug.assert(endpoint_index < self.endpoint_count);
         var shared = &self.endpoints[endpoint_index];
         shared.mutex.lockUncancelable(self.io);
         defer shared.mutex.unlock(self.io);
@@ -161,6 +171,10 @@ pub const ClientNetwork = struct {
             .reconnects = shared.reconnects,
             .partial_disconnects = shared.partial_disconnects,
             .connect_failures = shared.connect_failures,
+            .rx_bytes_total = shared.rx_bytes_total,
+            .ping_rtt_ms = shared.ping_rtt_ms,
+            .ping_sent = shared.ping_sent,
+            .ping_timeouts = shared.ping_timeouts,
         };
     }
 };
@@ -172,6 +186,8 @@ fn endpointWorkerMain(ctx: *WorkerContext) Io.Cancelable!void {
     if (cfg.trace_network) {
         std.log.info("network: worker enter host={s} port={}", .{ ctx.host, ctx.port });
     }
+    var parse_arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer parse_arena.deinit();
 
     while (!ctx.stop.load(.acquire)) {
         connect_attempt += 1;
@@ -180,13 +196,14 @@ fn endpointWorkerMain(ctx: *WorkerContext) Io.Cancelable!void {
         }
         setState(ctx.shared, io, .connecting);
 
-        var stream = connectToHost(io, ctx.host, ctx.port) catch |err| {
+        const connected = connectToHost(io, ctx.host, ctx.port) catch |err| {
             incrementConnectFailure(ctx.shared, io);
             std.log.warn("client: connect failed to {s}:{}: {}", .{ ctx.host, ctx.port, err });
             setState(ctx.shared, io, .disconnected);
             try sleepReconnect(io, ctx.stop);
             continue;
         };
+        var stream = connected.stream;
         defer stream.close(io);
         if (cfg.trace_network) {
             std.log.info("network: connected host={s} port={} socket_handle={}", .{ ctx.host, ctx.port, stream.socket.handle });
@@ -202,7 +219,13 @@ fn endpointWorkerMain(ctx: *WorkerContext) Io.Cancelable!void {
         setState(ctx.shared, io, .connected);
 
         var parser: LineParser = .{};
-        const loop_exit = try runReadLoop(ctx, &stream, &parser);
+        var ping_ctx = PingContext.init(io, connected.address, ctx.port + cfg.ping.port_offset) catch |err| blk: {
+            if (cfg.trace_network) std.log.warn("network: ping init failed host={s} err={}", .{ ctx.host, err });
+            break :blk PingContext.disabled();
+        };
+        defer ping_ctx.deinit(io);
+
+        const loop_exit = try runReadLoop(ctx, &stream, &parser, &parse_arena, &ping_ctx);
         if (cfg.trace_network) {
             std.log.info("network: read loop exit host={s} port={} reason={}", .{ ctx.host, ctx.port, loop_exit });
         }
@@ -228,16 +251,24 @@ fn endpointWorkerThreadMain(ctx: *WorkerContext) void {
     };
 }
 
-fn runReadLoop(ctx: *WorkerContext, stream: *Io.net.Stream, parser: *LineParser) Io.Cancelable!LoopExit {
+fn runReadLoop(
+    ctx: *WorkerContext,
+    stream: *Io.net.Stream,
+    parser: *LineParser,
+    parse_arena: *std.heap.ArenaAllocator,
+    ping_ctx: *PingContext,
+) Io.Cancelable!LoopExit {
     var recv_buffer: [cfg.recv_buffer_bytes]u8 = undefined;
     var iter: u64 = 0;
 
     while (!ctx.stop.load(.acquire)) {
         iter += 1;
+        pingTick(ping_ctx, ctx);
         const timeout: Io.Timeout = .{ .duration = .{ .raw = Io.Duration.fromMilliseconds(cfg.poll_timeout_ms), .clock = .real } };
 
         const message = stream.socket.receiveTimeout(ctx.io, &recv_buffer, timeout) catch |err| switch (err) {
             error.Timeout => {
+                pingTick(ping_ctx, ctx);
                 if (cfg.trace_network and cfg.trace_network_timeouts and (iter % 1000 == 0)) {
                     std.log.debug("network: timeout host={s} port={} iter={}", .{ ctx.host, ctx.port, iter });
                 }
@@ -269,7 +300,8 @@ fn runReadLoop(ctx: *WorkerContext, stream: *Io.net.Stream, parser: *LineParser)
             }
         }
 
-        feedParser(parser, message.data, ctx);
+        incrementRxBytes(ctx.shared, ctx.io, message.data.len);
+        feedParser(parser, message.data, ctx, parse_arena);
     }
 
     return .stopped;
@@ -286,7 +318,7 @@ const LineParser = struct {
     }
 };
 
-fn feedParser(parser: *LineParser, chunk: []const u8, ctx: *WorkerContext) void {
+fn feedParser(parser: *LineParser, chunk: []const u8, ctx: *WorkerContext, parse_arena: *std.heap.ArenaAllocator) void {
     if (cfg.trace_network) {
         std.log.debug("network: parser feed host={s} chunk_len={} current_line_len={} overflowed={}", .{
             ctx.host,
@@ -311,7 +343,7 @@ fn feedParser(parser: *LineParser, chunk: []const u8, ctx: *WorkerContext) void 
                 if (cfg.trace_network) {
                     std.log.debug("network: complete line host={s} len={}", .{ ctx.host, line.len });
                 }
-                if (line.len > 0) parseAndEnqueue(ctx.shared, ctx.io, line, ctx.host);
+                if (line.len > 0) parseAndEnqueue(ctx.shared, ctx.io, line, ctx.host, parse_arena);
                 parser.len = 0;
             }
             continue;
@@ -336,11 +368,9 @@ fn trimTrailingCarriage(line: []const u8) []const u8 {
     return line;
 }
 
-fn parseAndEnqueue(shared: *EndpointShared, io: Io, line: []const u8, host: []const u8) void {
-    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-    defer arena.deinit();
-
-    const report = std.json.parseFromSliceLeaky(common.Report, arena.allocator(), line, .{}) catch |err| {
+fn parseAndEnqueue(shared: *EndpointShared, io: Io, line: []const u8, host: []const u8, parse_arena: *std.heap.ArenaAllocator) void {
+    _ = parse_arena.reset(.retain_capacity);
+    const report = std.json.parseFromSliceLeaky(common.Report, parse_arena.allocator(), line, .{}) catch |err| {
         const preview_len = @min(line.len, 160);
         std.log.warn("client: json parse failed from {s}, len={}, err={}, payload='{s}'", .{ host, line.len, err, line[0..preview_len] });
         incrementParseError(shared, io);
@@ -415,20 +445,137 @@ fn incrementConnectFailure(shared: *EndpointShared, io: Io) void {
     shared.connect_failures += 1;
 }
 
-fn connectToHost(io: Io, host: []const u8, port: u16) anyerror!Io.net.Stream {
+fn incrementRxBytes(shared: *EndpointShared, io: Io, n: usize) void {
+    shared.mutex.lockUncancelable(io);
+    defer shared.mutex.unlock(io);
+    shared.rx_bytes_total += n;
+}
+
+fn setPingRtt(shared: *EndpointShared, io: Io, rtt_ms: f32) void {
+    shared.mutex.lockUncancelable(io);
+    defer shared.mutex.unlock(io);
+    shared.ping_rtt_ms = rtt_ms;
+}
+
+fn incrementPingSent(shared: *EndpointShared, io: Io) void {
+    shared.mutex.lockUncancelable(io);
+    defer shared.mutex.unlock(io);
+    shared.ping_sent += 1;
+}
+
+fn incrementPingTimeout(shared: *EndpointShared, io: Io) void {
+    shared.mutex.lockUncancelable(io);
+    defer shared.mutex.unlock(io);
+    shared.ping_timeouts += 1;
+}
+
+const PingContext = struct {
+    enabled: bool = false,
+    socket: ?Io.net.Socket = null,
+    dest: Io.net.IpAddress = undefined,
+    seq: u32 = 1,
+    pending_seq: u32 = 0,
+    pending_send_ts: Io.Timestamp = .zero,
+    last_sent_ts: Io.Timestamp = .zero,
+    pending: bool = false,
+
+    fn disabled() PingContext {
+        return .{};
+    }
+
+    fn init(io: Io, base_addr: Io.net.IpAddress, ping_port: u16) !PingContext {
+        if (!cfg.ping.enabled) return .{};
+        var dest = base_addr;
+        switch (dest) {
+            .ip4 => |*a| a.port = ping_port,
+            .ip6 => |*a| a.port = ping_port,
+        }
+
+        const bind_addr: Io.net.IpAddress = switch (dest) {
+            .ip4 => .{ .ip4 = Io.net.Ip4Address.unspecified(0) },
+            .ip6 => .{ .ip6 = Io.net.Ip6Address.unspecified(0) },
+        };
+        const socket = try Io.net.IpAddress.bind(&bind_addr, io, .{ .mode = .dgram, .protocol = .udp });
+        return .{
+            .enabled = true,
+            .socket = socket,
+            .dest = dest,
+            .last_sent_ts = Io.Timestamp.now(io, .boot),
+        };
+    }
+
+    fn deinit(self: *PingContext, io: Io) void {
+        if (self.socket) |*s| s.close(io);
+        self.socket = null;
+        self.pending = false;
+    }
+};
+
+fn pingTick(ping: *PingContext, ctx: *WorkerContext) void {
+    if (!ping.enabled or ping.socket == null) return;
+    const io = ctx.io;
+    const now = Io.Timestamp.now(io, .boot);
+
+    if (ping.pending) {
+        const elapsed_ms = ping.pending_send_ts.durationTo(now).toMilliseconds();
+        if (elapsed_ms >= cfg.ping.timeout_ms) {
+            ping.pending = false;
+            incrementPingTimeout(ctx.shared, io);
+        }
+    }
+
+    if (!ping.pending) {
+        const since_last_ms = ping.last_sent_ts.durationTo(now).toMilliseconds();
+        if (since_last_ms >= cfg.ping.interval_ms) {
+            sendPing(ping, ctx);
+        }
+    }
+
+    recvPingPong(ping, ctx, now);
+}
+
+fn sendPing(ping: *PingContext, ctx: *WorkerContext) void {
+    const socket = &(ping.socket.?);
+    var payload: [8]u8 = undefined;
+    std.mem.writeInt(u32, payload[0..4], cfg.ping.magic, .little);
+    std.mem.writeInt(u32, payload[4..8], ping.seq, .little);
+    socket.send(ctx.io, &ping.dest, &payload) catch return;
+    ping.pending = true;
+    ping.pending_seq = ping.seq;
+    ping.pending_send_ts = Io.Timestamp.now(ctx.io, .boot);
+    ping.last_sent_ts = ping.pending_send_ts;
+    ping.seq +%= 1;
+    incrementPingSent(ctx.shared, ctx.io);
+}
+
+fn recvPingPong(ping: *PingContext, ctx: *WorkerContext, now: Io.Timestamp) void {
+    const socket = &(ping.socket.?);
+    var recv_buf: [64]u8 = undefined;
+    const timeout: Io.Timeout = .{ .duration = .{ .raw = Io.Duration.fromMilliseconds(0), .clock = .real } };
+    const msg = socket.receiveTimeout(ctx.io, &recv_buf, timeout) catch |err| switch (err) {
+        error.Timeout => return,
+        else => return,
+    };
+    if (msg.data.len < 8) return;
+    const magic = std.mem.readInt(u32, msg.data[0..4], .little);
+    const seq = std.mem.readInt(u32, msg.data[4..8], .little);
+    if (magic != cfg.ping.magic) return;
+    if (!ping.pending or seq != ping.pending_seq) return;
+    ping.pending = false;
+    const rtt_ms: f32 = @floatFromInt(ping.pending_send_ts.durationTo(now).toMilliseconds());
+    setPingRtt(ctx.shared, ctx.io, rtt_ms);
+}
+
+const ConnectResult = struct {
+    stream: Io.net.Stream,
+    address: Io.net.IpAddress,
+};
+
+fn connectToHost(io: Io, host: []const u8, port: u16) anyerror!ConnectResult {
     if (cfg.trace_network) {
         std.log.info("network: connectToHost begin host={s} port={}", .{ host, port });
     }
-    if (Io.net.IpAddress.parse(host, port)) |addr| {
-        if (cfg.trace_network) {
-            std.log.debug("network: using IpAddress.connect host={s} port={}", .{ host, port });
-        }
-        return Io.net.IpAddress.connect(addr, io, .{ .mode = .stream, .protocol = .tcp, .timeout = .none });
-    } else |_| {
-        const name = try Io.net.HostName.init(host);
-        if (cfg.trace_network) {
-            std.log.debug("network: using HostName.connect host={s} port={}", .{ host, port });
-        }
-        return Io.net.HostName.connect(name, io, port, .{ .mode = .stream, .protocol = .tcp, .timeout = .none });
-    }
+    const addr = Io.net.IpAddress.parse(host, port) catch try Io.net.IpAddress.resolve(io, host, port);
+    const stream = try Io.net.IpAddress.connect(addr, io, .{ .mode = .stream, .protocol = .tcp, .timeout = .none });
+    return .{ .stream = stream, .address = addr };
 }

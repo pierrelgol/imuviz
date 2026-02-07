@@ -78,6 +78,7 @@ pub fn computeRootLayout(screen_w: i32, screen_h: i32, options: RootLayoutOption
 }
 
 pub fn panelRect(body: rl.Rectangle, endpoint_count: usize, index: usize, gap: f32) rl.Rectangle {
+    std.debug.assert(gap >= 0.0);
     if (endpoint_count <= 1) return body;
     if (index >= endpoint_count) return .{ .x = body.x, .y = body.y, .width = 0, .height = 0 };
 
@@ -166,6 +167,7 @@ fn chartGrid(
     gap: f32,
     options: ChartGridOptions,
 ) [cfg.ui.chart_count]rl.Rectangle {
+    std.debug.assert(gap >= 0.0);
     var out: [cfg.ui.chart_count]rl.Rectangle = [_]rl.Rectangle{.{ .x = area.x, .y = area.y, .width = 1.0, .height = 1.0 }} ** cfg.ui.chart_count;
     const capped_count = @min(count, out.len);
     if (capped_count == 0) return out;
@@ -245,6 +247,7 @@ pub fn splitComparison(body: rl.Rectangle, scale: UiScale, device_count: usize, 
 }
 
 fn horizontalSlices(area: rl.Rectangle, count: usize, gap: f32) [cfg.max_hosts]rl.Rectangle {
+    std.debug.assert(gap >= 0.0);
     var out: [cfg.max_hosts]rl.Rectangle = [_]rl.Rectangle{.{ .x = area.x, .y = area.y, .width = area.width, .height = area.height }} ** cfg.max_hosts;
     if (count == 0) return out;
 
@@ -262,6 +265,7 @@ fn horizontalSlices(area: rl.Rectangle, count: usize, gap: f32) [cfg.max_hosts]r
 }
 
 fn fixedGrid(area: rl.Rectangle, count: usize, columns: usize, gap: f32) [cfg.ui.chart_count]rl.Rectangle {
+    std.debug.assert(gap >= 0.0);
     var out: [cfg.ui.chart_count]rl.Rectangle = [_]rl.Rectangle{.{ .x = area.x, .y = area.y, .width = 1.0, .height = 1.0 }} ** cfg.ui.chart_count;
     const capped_count = @min(count, out.len);
     if (capped_count == 0) return out;

@@ -3,6 +3,7 @@ var should_stop: Atomic(bool) = .init(false);
 const Args = struct {
     ip: [:0]const u8 = "0.0.0.0",
     port: u16 = 9999,
+    ping_port: u16 = 10000,
     module_id: [4]u8 = [_]u8{'X'} ** 4,
     shm_path: [:0]const u8 = "/tmp/mmapIMU",
 
@@ -10,6 +11,7 @@ const Args = struct {
 
     pub fn fromArgIter(it: *std.process.Args.Iterator) error{ InvalidArgument, InvalidValue }!Args {
         var self: Args = .init;
+        var ping_port_explicit = false;
 
         if (it.skip() == false) {
             return self;
@@ -21,6 +23,12 @@ const Args = struct {
             if (std.mem.startsWith(u8, trimmed, "--port")) {
                 const port_string = it.next() orelse return error.InvalidValue;
                 self.port = std.fmt.parseInt(u16, port_string, 10) catch return error.InvalidValue;
+                if (!ping_port_explicit) self.ping_port = self.port +| 1;
+            }
+            if (std.mem.startsWith(u8, trimmed, "--ping_port")) {
+                const ping_string = it.next() orelse return error.InvalidValue;
+                self.ping_port = std.fmt.parseInt(u16, ping_string, 10) catch return error.InvalidValue;
+                ping_port_explicit = true;
             }
 
             if (std.mem.startsWith(u8, trimmed, "--module_id")) {
@@ -254,7 +262,19 @@ pub fn main(init: std.process.Init) !void {
     };
 
     log.info("Server listening on {s}:{}", .{ parsed.ip, parsed.port });
+    log.info("Ping UDP listening on {s}:{}", .{ parsed.ip, parsed.ping_port });
     log.info("Waiting for client connection...", .{});
+
+    var ping_addr = Io.net.IpAddress.parse(parsed.ip, parsed.ping_port) catch |err| {
+        log.err("failed to parse ping address: {}", .{err});
+        return err;
+    };
+    var ping_socket = Io.net.IpAddress.bind(&ping_addr, io, .{ .mode = .dgram, .protocol = .udp }) catch |err| {
+        log.err("failed to bind ping socket: {}", .{err});
+        return err;
+    };
+    defer ping_socket.close(io);
+    var ping_buffer: [64]u8 = undefined;
 
     const State = enum { no_client, client_accepted, client_configured, client_disconnected, new_data, client_written, wait, wait_long };
     const state: State = .no_client;
@@ -265,6 +285,7 @@ pub fn main(init: std.process.Init) !void {
 
     state: switch (state) {
         .no_client => {
+            servicePing(io, &ping_socket, &ping_buffer);
             log.debug("State: no_client - waiting for connection", .{});
             if (should_stop.load(.acquire)) return;
             _ = server.acceptClient() catch |err| switch (err) {
@@ -293,6 +314,7 @@ pub fn main(init: std.process.Init) !void {
             continue :state .client_configured;
         },
         .client_configured => {
+            servicePing(io, &ping_socket, &ping_buffer);
             log.debug("State: client_configured - reading shared memory", .{});
             shm_mmap.read(io) catch |err| {
                 log.err("Failed to read shared memory: {}", .{err});
@@ -303,6 +325,7 @@ pub fn main(init: std.process.Init) !void {
             continue :state .new_data;
         },
         .new_data => {
+            servicePing(io, &ping_socket, &ping_buffer);
             log.debug("State: new_data - deserializing report", .{});
             var shm_fixed_reader: Io.Reader = .fixed(shm_mmap.memory[0..REPORT_BYTE_SIZE]);
             const report = common.Report.deserialize(&shm_fixed_reader, builtin.cpu.arch.endian()) catch |err| {
@@ -345,6 +368,7 @@ pub fn main(init: std.process.Init) !void {
             continue :state .wait;
         },
         .wait => {
+            servicePing(io, &ping_socket, &ping_buffer);
             log.debug("State: wait - sleeping 1ms (client connected)", .{});
             if (should_stop.load(.acquire)) return;
 
@@ -355,6 +379,7 @@ pub fn main(init: std.process.Init) !void {
             continue :state .client_configured;
         },
         .wait_long => {
+            servicePing(io, &ping_socket, &ping_buffer);
             log.debug("State: wait_long - sleeping 33ms (no client)", .{});
             if (should_stop.load(.acquire)) return;
 
@@ -371,6 +396,18 @@ pub fn main(init: std.process.Init) !void {
             if (should_stop.load(.acquire)) return;
             continue :state .wait_long;
         },
+    }
+}
+
+fn servicePing(io: Io, ping_socket: *Io.net.Socket, ping_buffer: *[64]u8) void {
+    const timeout: Io.Timeout = .{ .duration = .{ .raw = Io.Duration.fromMilliseconds(0), .clock = .real } };
+    while (true) {
+        const msg = ping_socket.receiveTimeout(io, ping_buffer, timeout) catch |err| switch (err) {
+            error.Timeout => return,
+            else => return,
+        };
+        if (msg.data.len < 8) continue;
+        ping_socket.send(io, &msg.from, msg.data) catch {};
     }
 }
 

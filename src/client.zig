@@ -7,6 +7,7 @@ const History = @import("client/history.zig").History;
 const Renderer = @import("client/renderer.zig").Renderer;
 const DeviceFrame = @import("client/renderer.zig").DeviceFrame;
 const options_mod = @import("client/options.zig");
+const profiler_mod = @import("client/profiler.zig");
 const settings_mod = @import("client/settings.zig");
 const utils = @import("client/utils.zig");
 
@@ -16,6 +17,7 @@ comptime {
     std.testing.refAllDecls(History);
     std.testing.refAllDecls(DeviceFrame);
     std.testing.refAllDecls(options_mod);
+    std.testing.refAllDecls(profiler_mod);
     std.testing.refAllDecls(settings_mod);
     std.testing.refAllDecls(utils);
 }
@@ -157,6 +159,7 @@ pub fn main(init: std.process.Init) !void {
     var last_settings_save_ms: i64 = 0;
     var settings_save_pending = false;
     var options_menu: options_mod.Menu = .{};
+    var profiler_overlay: profiler_mod.Overlay = .{};
     var renderer: Renderer = .{
         .root_layout_options = .{
             .scale_policy = .{
@@ -188,12 +191,20 @@ pub fn main(init: std.process.Init) !void {
     var frame_count: u64 = 0;
 
     while (!rl.windowShouldClose() and !should_stop.load(.acquire)) {
+        const t_frame0 = nowMs();
+        var perf: profiler_mod.Metrics = .{};
         frame_count += 1;
+        const t_input0 = nowMs();
         options_menu.update(&runtime_options);
+        profiler_overlay.updateToggle(&runtime_options.show_perf_overlay);
+        profiler_overlay.sampleMemory(io);
         const normalized_options = settings_mod.normalize(runtime_options);
         if (!std.meta.eql(normalized_options, last_saved_options)) {
             settings_save_pending = true;
         }
+        perf.input_ms = @floatCast(nowMs() - t_input0);
+
+        const t_drain0 = nowMs();
         for (0..args.hosts.count) |i| {
             const drained = client_network.drain(i, &drain_buffer);
             for (drain_buffer[0..drained]) |report| {
@@ -203,8 +214,10 @@ pub fn main(init: std.process.Init) !void {
                 std.log.info("client: frame={} endpoint={} drained={} history_len={}", .{ frame_count, i, drained, histories[i].len });
             }
         }
+        perf.drain_ms = @floatCast(nowMs() - t_drain0);
 
         const now_ms: i64 = @intFromFloat(rl.getTime() * 1000.0);
+        const t_settings0 = nowMs();
         if (settings_store) |*store| {
             if (settings_save_pending and (now_ms - last_settings_save_ms) >= cfg.settings.autosave_interval_ms) {
                 if (store.save(runtime_options)) |_| {
@@ -216,6 +229,9 @@ pub fn main(init: std.process.Init) !void {
                 last_settings_save_ms = now_ms;
             }
         }
+        perf.settings_ms = @floatCast(nowMs() - t_settings0);
+
+        const t_snapshot0 = nowMs();
         if (now_ms - last_render_debug_ms >= cfg.render_debug_interval_ms) {
             last_render_debug_ms = now_ms;
             for (0..args.hosts.count) |i| {
@@ -234,20 +250,43 @@ pub fn main(init: std.process.Init) !void {
         }
 
         var frames: [cfg.max_hosts]DeviceFrame = undefined;
+        var network_samples: [cfg.max_hosts]profiler_mod.NetworkEndpointSample = undefined;
         for (0..args.hosts.count) |i| {
+            const snap = client_network.snapshot(i);
             frames[i] = .{
                 .title = if (args.hosts.count == 1) "IMU Device" else args.hosts.get(i),
                 .history = &histories[i],
-                .snapshot = client_network.snapshot(i),
+                .snapshot = snap,
+            };
+            network_samples[i] = .{
+                .rx_bytes_total = snap.rx_bytes_total,
+                .ping_rtt_ms = snap.ping_rtt_ms,
             };
         }
+        profiler_overlay.pushNetwork(network_samples[0..args.hosts.count]);
+        perf.snapshot_ms = @floatCast(nowMs() - t_snapshot0);
 
         rl.beginDrawing();
-        defer rl.endDrawing();
+        const render_stats = renderer.draw(frames[0..args.hosts.count], runtime_options);
+        perf.renderer_total_ms = render_stats.total_ms;
+        perf.renderer_prepare_ms = render_stats.prepare_ms;
+        perf.renderer_title_ms = render_stats.title_ms;
+        perf.renderer_scenes_ms = render_stats.scenes_ms;
+        perf.renderer_plots_ms = render_stats.plots_ms;
 
-        renderer.draw(frames[0..args.hosts.count], runtime_options);
+        const t_menu_draw0 = nowMs();
         options_menu.draw(runtime_options);
+        perf.menu_draw_ms = @floatCast(nowMs() - t_menu_draw0);
+        profiler_overlay.draw(runtime_options.show_perf_overlay, cfg.target_fps);
+        rl.endDrawing();
+
+        perf.frame_ms = @floatCast(nowMs() - t_frame0);
+        profiler_overlay.push(perf);
     }
+}
+
+fn nowMs() f64 {
+    return rl.getTime() * 1000.0;
 }
 
 test "hosts parse" {

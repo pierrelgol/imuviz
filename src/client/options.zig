@@ -4,6 +4,7 @@ const cfg = @import("config.zig");
 
 pub const RuntimeOptions = struct {
     show_menu: bool = false,
+    show_perf_overlay: bool = false,
     show_fps: bool = true,
     show_scene: bool = true,
     show_status_line: bool = true,
@@ -44,30 +45,32 @@ pub const Menu = struct {
     };
 
     pub fn update(self: *Menu, options: *RuntimeOptions) void {
-        if (rl.isKeyPressed(.semicolon)) {
+        if (rl.isKeyPressed(cfg.options_menu.toggle_key)) {
             options.show_menu = !options.show_menu;
             if (options.show_menu) self.mode = .normal;
         }
         if (!options.show_menu) return;
 
-        if (rl.isKeyPressed(.escape)) self.mode = .normal;
-        if (rl.isKeyPressed(.i)) self.mode = .insert;
+        if (rl.isKeyPressed(cfg.options_menu.mode_normal_key)) self.mode = .normal;
+        if (rl.isKeyPressed(cfg.options_menu.mode_insert_key)) self.mode = .insert;
 
         self.handleMouse(options);
 
         const item_count = items.len;
+        std.debug.assert(item_count > 0);
+        if (self.selected >= item_count) self.selected = 0;
         if (self.mode == .normal) {
-            if (rl.isKeyPressed(.k)) {
+            if (rl.isKeyPressed(cfg.options_menu.nav_up_key)) {
                 self.selected = if (self.selected == 0) item_count - 1 else self.selected - 1;
             }
-            if (rl.isKeyPressed(.j)) {
+            if (rl.isKeyPressed(cfg.options_menu.nav_down_key)) {
                 self.selected = (self.selected + 1) % item_count;
             }
         }
-        if (rl.isKeyPressed(.h)) {
+        if (rl.isKeyPressed(cfg.options_menu.decrement_key)) {
             items[self.selected].apply(options, -1);
         }
-        if (rl.isKeyPressed(.l)) {
+        if (rl.isKeyPressed(cfg.options_menu.increment_key)) {
             items[self.selected].apply(options, 1);
         }
     }
@@ -85,7 +88,7 @@ pub const Menu = struct {
         const title = std.fmt.bufPrintZ(&title_buf, "Options [:] mode={s}", .{modeText(self.mode)}) catch return;
         rl.drawText(title, @intFromFloat(rect.x + cfg.options_menu.panel_padding), @intFromFloat(rect.y + cfg.options_menu.panel_padding), cfg.options_menu.title_size, cfg.theme.text_primary);
 
-        var y = rect.y + cfg.options_menu.panel_padding + @as(f32, @floatFromInt(cfg.options_menu.title_size)) + 6.0;
+        var y = rect.y + cfg.options_menu.panel_padding + @as(f32, @floatFromInt(cfg.options_menu.title_size)) + cfg.options_menu.panel_title_gap;
         for (items, 0..) |item, i| {
             var line_buf: [160]u8 = undefined;
             const value = item.value(options, &line_buf) catch continue;
@@ -113,7 +116,7 @@ pub const Menu = struct {
             item.apply(options, 1);
             return;
         }
-        const split_x = rect.x + rect.width * 0.60;
+        const split_x = rect.x + rect.width * cfg.options_menu.scalar_mouse_split_ratio;
         item.apply(options, if (mouse.x < split_x) -1 else 1);
     }
 };
@@ -131,6 +134,7 @@ const Item = struct {
 };
 
 const items = [_]Item{
+    .{ .name = "perf_overlay", .kind = .toggle, .value = boolValue(.show_perf_overlay), .apply = boolApply(.show_perf_overlay) },
     .{ .name = "fps", .kind = .toggle, .value = boolValue(.show_fps), .apply = boolApply(.show_fps) },
     .{ .name = "scene_3d", .kind = .toggle, .value = boolValue(.show_scene), .apply = boolApply(.show_scene) },
     .{ .name = "status_line", .kind = .toggle, .value = boolValue(.show_status_line), .apply = boolApply(.show_status_line) },
@@ -172,7 +176,7 @@ fn panelRect(sw: f32, sh: f32) rl.Rectangle {
 }
 
 fn itemIndexAtMouse(rect: rl.Rectangle, mouse: rl.Vector2) ?usize {
-    const start_y = rect.y + cfg.options_menu.panel_padding + @as(f32, @floatFromInt(cfg.options_menu.title_size)) + 6.0;
+    const start_y = rect.y + cfg.options_menu.panel_padding + @as(f32, @floatFromInt(cfg.options_menu.title_size)) + cfg.options_menu.panel_title_gap;
     if (mouse.y < start_y) return null;
     const rel = mouse.y - start_y;
     const idx: usize = @intFromFloat(@floor(rel / cfg.options_menu.panel_line_gap));
