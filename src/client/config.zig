@@ -66,6 +66,11 @@ pub const plot = struct {
     pub const y_tick_lane_width_ratio: f32 = 0.055;
     pub const cursor_column_fill = color(10, 13, 18, 210);
     pub const show_delta_series: bool = true;
+    pub const show_stats_panel: bool = true;
+    pub const stats_refresh_interval_seconds: f64 = 1.0;
+    pub const stats_size_ratio: f32 = 0.032;
+    pub const stats_line_gap_ratio: f32 = 0.070;
+    pub const stats_section_gap_ratio: f32 = 0.040;
 };
 
 pub const window_initial_width: i32 = 1600;

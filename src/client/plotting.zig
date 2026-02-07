@@ -38,6 +38,8 @@ pub const PlotOptions = struct {
     min_samples: usize = cfg.plot.min_samples,
     y_domain: YDomain = .dynamic,
     cursor_x_norm: ?f32 = null,
+    show_stats_panel: bool = cfg.plot.show_stats_panel,
+    stats_key: ?usize = null,
 };
 
 pub const YDomain = union(enum) {
@@ -90,6 +92,7 @@ pub const PlotStyle = struct {
         legend_size_ratio: f32 = cfg.plot.legend_size_ratio,
         empty_size_ratio: f32 = cfg.plot.empty_size_ratio,
         cursor_readout_size_ratio: f32 = cfg.plot.cursor_readout_size_ratio,
+        stats_size_ratio: f32 = cfg.plot.stats_size_ratio,
         min_font_px: i32 = cfg.plot.min_font_px,
     };
 
@@ -119,6 +122,18 @@ pub fn drawPlot(rect: rl.Rectangle, options: PlotOptions, style: PlotStyle) void
     else
         .{ .min = absoluteLatest(options.series) - options.x_window_seconds, .max = absoluteLatest(options.series) };
 
+    drawSidePanel(
+        rect,
+        options.series,
+        x_domain,
+        options.x_labels_relative_to_latest,
+        options.cursor_x_norm,
+        options.show_stats_panel,
+        options.stats_key,
+        style,
+        min_dim,
+    );
+
     const y_domain = switch (options.y_domain) {
         .dynamic => computeYDomain(options.series, x_domain, options.x_labels_relative_to_latest, cfg.plot.y_padding_fraction) orelse {
             drawEmptyState(chart_rect, options.empty_message, style, min_dim);
@@ -140,7 +155,7 @@ pub fn drawPlot(rect: rl.Rectangle, options: PlotOptions, style: PlotStyle) void
 
     drawSeries(options.series, chart_rect, x_domain, y_domain, options.x_labels_relative_to_latest, style, min_dim);
     if (options.cursor_x_norm) |cursor_x| {
-        drawCursorOverlay(rect, chart_rect, options.series, x_domain, options.x_labels_relative_to_latest, cursor_x, style, min_dim);
+        drawCursorLine(chart_rect, cursor_x, style, min_dim);
     }
 
     if (options.show_legend) drawLegend(rect, options.series, style, min_dim);
@@ -161,27 +176,26 @@ fn drawFrame(rect: rl.Rectangle, style: PlotStyle) void {
 
 fn computeChartRect(rect: rl.Rectangle, layout: PlotStyle.Layout) rl.Rectangle {
     const cursor_column = computeCursorColumnRect(rect, layout);
-    const left_pad = rect.width * layout.left_padding_ratio;
     const right_pad = rect.width * layout.right_padding_ratio;
     const top_pad = rect.height * layout.top_padding_ratio;
     const bottom_pad = rect.height * layout.bottom_padding_ratio;
     const column_gap = rect.width * layout.cursor_column_gap_ratio;
     const y_tick_lane = rect.width * layout.y_tick_lane_width_ratio;
     return .{
-        .x = rect.x + left_pad + cursor_column.width + column_gap + y_tick_lane,
+        .x = cursor_column.x + cursor_column.width + column_gap + y_tick_lane,
         .y = rect.y + top_pad,
-        .width = @max(1.0, rect.width - left_pad - right_pad - cursor_column.width - column_gap - y_tick_lane),
+        .width = @max(1.0, rect.width - right_pad - cursor_column.width - column_gap - y_tick_lane),
         .height = @max(1.0, rect.height - top_pad - bottom_pad),
     };
 }
 
 fn computeCursorColumnRect(rect: rl.Rectangle, layout: PlotStyle.Layout) rl.Rectangle {
-    const left_pad = rect.width * layout.left_padding_ratio;
     const top_pad = rect.height * layout.top_padding_ratio;
     const bottom_pad = rect.height * layout.bottom_padding_ratio;
-    const w = @max(1.0, rect.width * layout.cursor_column_width_ratio);
+    const left_pad = rect.width * layout.left_padding_ratio;
+    const w = @max(1.0, rect.width * layout.cursor_column_width_ratio + left_pad);
     return .{
-        .x = rect.x + left_pad,
+        .x = rect.x + 1.0,
         .y = rect.y + top_pad,
         .width = w,
         .height = @max(1.0, rect.height - top_pad - bottom_pad),
@@ -373,12 +387,8 @@ fn drawOneSeries(s: SeriesDef, chart_rect: rl.Rectangle, x_domain: AxisDomain, y
     }
 }
 
-fn drawCursorOverlay(
-    rect: rl.Rectangle,
+fn drawCursorLine(
     chart_rect: rl.Rectangle,
-    series: []const SeriesDef,
-    x_domain: AxisDomain,
-    relative: bool,
     cursor_x_norm: f32,
     style: PlotStyle,
     min_dim: f32,
@@ -392,51 +402,199 @@ fn drawCursorOverlay(
         thickness,
         style.palette.cursor_line,
     );
-
-    const x_value = lerpF64(x_domain.min, x_domain.max, @as(f64, @floatCast(t)));
-    drawCursorReadout(rect, chart_rect, series, x_value, x_domain, relative, style, min_dim);
 }
 
-fn drawCursorReadout(
+fn drawSidePanel(
     rect: rl.Rectangle,
-    chart_rect: rl.Rectangle,
     series: []const SeriesDef,
-    x_value: f64,
     x_domain: AxisDomain,
     relative: bool,
+    cursor_x_norm: ?f32,
+    show_stats_panel: bool,
+    stats_key: ?usize,
     style: PlotStyle,
     min_dim: f32,
 ) void {
-    const font = fontSize(min_dim, style.typography.cursor_readout_size_ratio, style.typography.min_font_px);
-    _ = chart_rect;
     const panel = computeCursorColumnRect(rect, style.layout);
     rl.drawRectangleRec(panel, style.palette.cursor_panel_fill);
 
+    const cursor_font = fontSize(min_dim, style.typography.cursor_readout_size_ratio, style.typography.min_font_px);
+    const stats_font = fontSize(min_dim, style.typography.stats_size_ratio, style.typography.min_font_px);
     const origin_x: i32 = @intFromFloat(panel.x + style.layout.cursor_column_inner_padding_px);
     const origin_y: i32 = @intFromFloat(panel.y + panel.height * style.layout.cursor_readout_offset_ratio);
     const line_gap: i32 = @max(1, @as(i32, @intFromFloat(panel.height * style.layout.cursor_readout_line_gap_ratio)));
+    const section_gap: i32 = @max(1, @as(i32, @intFromFloat(panel.height * cfg.plot.stats_section_gap_ratio)));
 
-    var time_buf: [64]u8 = undefined;
-    const time_text = std.fmt.bufPrintZ(&time_buf, "t={d:.2}s", .{x_value}) catch return;
-    rl.drawText(time_text, origin_x, origin_y, font, style.palette.tick);
+    var y = origin_y;
+    if (cursor_x_norm) |cursor_x| {
+        const x_value = lerpF64(x_domain.min, x_domain.max, @as(f64, @floatCast(clamp01(cursor_x))));
+        var time_buf: [64]u8 = undefined;
+        const time_text = std.fmt.bufPrintZ(&time_buf, "t={d:.2}s", .{x_value}) catch return;
+        rl.drawText(time_text, origin_x, y, cursor_font, style.palette.tick);
+        y += line_gap;
 
+        for (series) |s| {
+            var line_buf: [128]u8 = undefined;
+            const clear_name = clearSeriesName(s.label);
+            if (!s.available) {
+                const line = std.fmt.bufPrintZ(&line_buf, "{s}: n/a", .{clear_name}) catch continue;
+                rl.drawText(line, origin_x, y, cursor_font, style.palette.empty_text);
+                y += line_gap;
+                continue;
+            }
+
+            const value = sampleAtCursor(s, x_value, x_domain, relative) orelse {
+                const line = std.fmt.bufPrintZ(&line_buf, "{s}: n/a", .{clear_name}) catch continue;
+                rl.drawText(line, origin_x, y, cursor_font, style.palette.empty_text);
+                y += line_gap;
+                continue;
+            };
+            const line = std.fmt.bufPrintZ(&line_buf, "{s}: {d:.2}", .{ clear_name, value }) catch continue;
+            rl.drawText(line, origin_x, y, cursor_font, s.color);
+            y += line_gap;
+        }
+        y += section_gap;
+    }
+
+    if (!show_stats_panel) return;
+    drawStatsPanel(series, origin_x, y, line_gap, x_domain, relative, stats_key, stats_font, style);
+}
+
+const SeriesStats = struct {
+    min: f32,
+    max: f32,
+    mean: f64,
+    stddev: f64,
+    rms: f64,
+    count: usize,
+};
+
+const max_series_per_plot = cfg.max_hosts + 1;
+
+const StatsCacheEntry = struct {
+    valid: bool = false,
+    last_update_sec: f64 = -1e9,
+    series_count: usize = 0,
+    available: [max_series_per_plot]bool = [_]bool{false} ** max_series_per_plot,
+    stats: [max_series_per_plot]?SeriesStats = [_]?SeriesStats{null} ** max_series_per_plot,
+};
+
+var stats_cache: [cfg.ui.chart_count]StatsCacheEntry = [_]StatsCacheEntry{.{}} ** cfg.ui.chart_count;
+
+fn drawStatsPanel(
+    series: []const SeriesDef,
+    x: i32,
+    start_y: i32,
+    line_gap: i32,
+    x_domain: AxisDomain,
+    relative: bool,
+    stats_key: ?usize,
+    font: i32,
+    style: PlotStyle,
+) void {
+    const snapshot = getStatsSnapshot(series, x_domain, relative, stats_key);
+    var y = start_y;
     for (series, 0..) |s, i| {
-        const y = origin_y + @as(i32, @intCast(i + 1)) * line_gap;
-        var line_buf: [128]u8 = undefined;
-        if (!s.available) {
-            const line = std.fmt.bufPrintZ(&line_buf, "{s}: n/a", .{s.label}) catch continue;
-            rl.drawText(line, origin_x, y, font, style.palette.empty_text);
+        var line1_buf: [160]u8 = undefined;
+        var line2_buf: [160]u8 = undefined;
+        const clear_name = clearSeriesName(s.label);
+        if (!snapshot.available[i]) {
+            const line = std.fmt.bufPrintZ(&line1_buf, "{s}: unavailable", .{clear_name}) catch continue;
+            rl.drawText(line, x, y, font, style.palette.empty_text);
+            y += line_gap;
             continue;
         }
 
-        const value = sampleAtCursor(s, x_value, x_domain, relative) orelse {
-            const line = std.fmt.bufPrintZ(&line_buf, "{s}: n/a", .{s.label}) catch continue;
-            rl.drawText(line, origin_x, y, font, style.palette.empty_text);
+        const stats = snapshot.stats[i] orelse {
+            const line = std.fmt.bufPrintZ(&line1_buf, "{s}: n/a", .{clear_name}) catch continue;
+            rl.drawText(line, x, y, font, style.palette.empty_text);
+            y += line_gap;
             continue;
         };
-        const line = std.fmt.bufPrintZ(&line_buf, "{s}: {d:.2}", .{ s.label, value }) catch continue;
-        rl.drawText(line, origin_x, y, font, s.color);
+
+        if (s.rhs_history != null) {
+            const line = std.fmt.bufPrintZ(&line1_buf, "{s} RMS: {d:.1}", .{ clear_name, stats.rms }) catch continue;
+            rl.drawText(line, x, y, font, s.color);
+            y += line_gap;
+        } else {
+            const line1 = std.fmt.bufPrintZ(&line1_buf, "{s} min/max: {d:.0}/{d:.0}", .{ clear_name, stats.min, stats.max }) catch continue;
+            rl.drawText(line1, x, y, font, s.color);
+            y += line_gap;
+
+            const line2 = std.fmt.bufPrintZ(&line2_buf, "{s} mean/std: {d:.1}/{d:.1}", .{ clear_name, stats.mean, stats.stddev }) catch continue;
+            rl.drawText(line2, x, y, font, s.color);
+            y += line_gap;
+        }
     }
+}
+
+fn computeSeriesStats(s: SeriesDef, x_domain: AxisDomain, relative: bool) ?SeriesStats {
+    var min_v: f32 = std.math.inf(f32);
+    var max_v: f32 = -std.math.inf(f32);
+    var sum: f64 = 0.0;
+    var sum_sq: f64 = 0.0;
+    var count: usize = 0;
+
+    const len = if (s.rhs_history != null) pairedSeriesLen(s) else s.history.len;
+    for (0..len) |i| {
+        const x = sampleXAtIndex(s.history, i, relative) orelse continue;
+        if (x < x_domain.min or x > x_domain.max) continue;
+        const v = seriesValueAtIndex(s, i) orelse continue;
+        min_v = @min(min_v, v);
+        max_v = @max(max_v, v);
+        const vf: f64 = v;
+        sum += vf;
+        sum_sq += vf * vf;
+        count += 1;
+    }
+
+    if (count == 0) return null;
+    const n = @as(f64, @floatFromInt(count));
+    const mean = sum / n;
+    const variance = @max(0.0, (sum_sq / n) - (mean * mean));
+    return .{
+        .min = min_v,
+        .max = max_v,
+        .mean = mean,
+        .stddev = @sqrt(variance),
+        .rms = @sqrt(sum_sq / n),
+        .count = count,
+    };
+}
+
+fn getStatsSnapshot(series: []const SeriesDef, x_domain: AxisDomain, relative: bool, stats_key: ?usize) StatsCacheEntry {
+    const key = stats_key orelse return computeStatsEntry(series, x_domain, relative);
+    if (key >= stats_cache.len) return computeStatsEntry(series, x_domain, relative);
+
+    var entry = &stats_cache[key];
+    const now = rl.getTime();
+    if (!entry.valid or entry.series_count != series.len or (now - entry.last_update_sec) >= cfg.plot.stats_refresh_interval_seconds) {
+        entry.* = computeStatsEntry(series, x_domain, relative);
+        entry.valid = true;
+        entry.last_update_sec = now;
+    }
+    return entry.*;
+}
+
+fn computeStatsEntry(series: []const SeriesDef, x_domain: AxisDomain, relative: bool) StatsCacheEntry {
+    var entry: StatsCacheEntry = .{};
+    entry.series_count = @min(series.len, max_series_per_plot);
+    for (series[0..entry.series_count], 0..) |s, i| {
+        entry.available[i] = s.available;
+        if (!s.available) {
+            entry.stats[i] = null;
+            continue;
+        }
+        entry.stats[i] = computeSeriesStats(s, x_domain, relative);
+    }
+    return entry;
+}
+
+fn clearSeriesName(label: []const u8) []const u8 {
+    if (std.mem.eql(u8, label, "1")) return "IMU 1";
+    if (std.mem.eql(u8, label, "2")) return "IMU 2";
+    if (std.mem.eql(u8, label, "d")) return "Delta";
+    return label;
 }
 
 fn sampleAtCursor(s: SeriesDef, x_value: f64, x_domain: AxisDomain, relative: bool) ?f32 {
