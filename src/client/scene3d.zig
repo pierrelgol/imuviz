@@ -81,9 +81,8 @@ pub fn draw(target: *SceneTarget, rect: rl.Rectangle, history: *const History) v
     rl.drawSphereWires(cfg.scene3d.sphere_center, cfg.scene3d.sphere_radius, 16, 16, cfg.renderer.scene_sphere_wire);
 
     const orientation = latestOrientation(history);
-    drawAxisArrow(orientation.elevation, orientation.bearing, .{ .x = 1, .y = 0, .z = 0 }, rl.Color.red);
-    drawAxisArrow(orientation.elevation, orientation.bearing, .{ .x = 0, .y = 1, .z = 0 }, rl.Color.green);
-    drawAxisArrow(orientation.elevation, orientation.bearing, .{ .x = 0, .y = 0, .z = 1 }, rl.Color.blue);
+    drawReferenceAxes();
+    drawImuDirectionArrow(orientation.elevation, orientation.bearing);
     rl.endMode3D();
     rl.endTextureMode();
 
@@ -115,17 +114,43 @@ fn latestOrientation(history: *const History) struct { elevation: f32, bearing: 
     return .{ .elevation = sample.elevation, .bearing = sample.bearing };
 }
 
-fn drawAxisArrow(elevation_deg: f32, bearing_deg: f32, axis: rl.Vector3, color: rl.Color) void {
-    const dir = rotateAxis(axis, elevation_deg, bearing_deg);
-    const origin = cfg.scene3d.origin;
+fn drawReferenceAxes() void {
+    const s = cfg.scene3d.reference_axis_length / cfg.scene3d.axis_head_end;
+    const origin = referenceOriginNearCamera();
+    drawArrow(origin, .{ .x = 1, .y = 0, .z = 0 }, cfg.renderer.scene_ref_x, s);
+    drawArrow(origin, .{ .x = 0, .y = 1, .z = 0 }, cfg.renderer.scene_ref_y, s);
+    drawArrow(origin, .{ .x = 0, .y = 0, .z = 1 }, cfg.renderer.scene_ref_z, s);
+}
 
-    const shaft_start = origin.add(dir.scale(cfg.scene3d.axis_shaft_start));
-    const shaft_end = origin.add(dir.scale(cfg.scene3d.axis_shaft_end));
-    rl.drawCylinderEx(shaft_start, shaft_end, cfg.scene3d.axis_shaft_radius, cfg.scene3d.axis_shaft_radius, cfg.scene3d.axis_sides, color);
+fn referenceOriginNearCamera() rl.Vector3 {
+    const half_extent = (@as(f32, @floatFromInt(cfg.scene3d.grid_slices)) * cfg.scene3d.grid_spacing) * 0.5;
+    return .{
+        .x = -half_extent + cfg.scene3d.reference_inset,
+        .y = cfg.scene3d.reference_height,
+        .z = -half_extent + cfg.scene3d.reference_inset,
+    };
+}
 
-    const head_start = origin.add(dir.scale(cfg.scene3d.axis_head_start));
-    const head_end = origin.add(dir.scale(cfg.scene3d.axis_head_end));
-    rl.drawCylinderEx(head_start, head_end, cfg.scene3d.axis_head_radius, 0.0, cfg.scene3d.axis_sides, color);
+fn drawImuDirectionArrow(elevation_deg: f32, bearing_deg: f32) void {
+    const dir = normalizeSafe(rotateAxis(.{ .x = 1, .y = 0, .z = 0 }, elevation_deg, bearing_deg), .{ .x = 1, .y = 0, .z = 0 });
+    drawArrow(cfg.scene3d.origin, dir, cfg.renderer.scene_imu_arrow, 1.0);
+}
+
+fn drawArrow(origin: rl.Vector3, dir: rl.Vector3, color: rl.Color, scale: f32) void {
+    const shaft_start = origin.add(dir.scale(cfg.scene3d.axis_shaft_start * scale));
+    const shaft_end = origin.add(dir.scale(cfg.scene3d.axis_shaft_end * scale));
+    rl.drawCylinderEx(
+        shaft_start,
+        shaft_end,
+        cfg.scene3d.axis_shaft_radius * scale,
+        cfg.scene3d.axis_shaft_radius * scale,
+        cfg.scene3d.axis_sides,
+        color,
+    );
+
+    const head_start = origin.add(dir.scale(cfg.scene3d.axis_head_start * scale));
+    const head_end = origin.add(dir.scale(cfg.scene3d.axis_head_end * scale));
+    rl.drawCylinderEx(head_start, head_end, cfg.scene3d.axis_head_radius * scale, 0.0, cfg.scene3d.axis_sides, color);
 }
 
 fn rotateAxis(axis: rl.Vector3, elevation_deg: f32, bearing_deg: f32) rl.Vector3 {
@@ -152,6 +177,17 @@ fn rotateAxis(axis: rl.Vector3, elevation_deg: f32, bearing_deg: f32) rl.Vector3
     };
 
     return v;
+}
+
+fn vecDot(a: rl.Vector3, b: rl.Vector3) f32 {
+    return a.x * b.x + a.y * b.y + a.z * b.z;
+}
+
+fn normalizeSafe(v: rl.Vector3, fallback: rl.Vector3) rl.Vector3 {
+    const len_sq = vecDot(v, v);
+    if (len_sq <= 1e-8) return fallback;
+    const inv_len = 1.0 / @sqrt(len_sq);
+    return .{ .x = v.x * inv_len, .y = v.y * inv_len, .z = v.z * inv_len };
 }
 
 fn isDrawableRect(rect: rl.Rectangle) bool {

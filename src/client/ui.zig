@@ -1,5 +1,6 @@
 const rl = @import("raylib");
 const cfg = @import("config.zig");
+const std = @import("std");
 
 pub const UiScale = struct {
     margin: f32,
@@ -170,7 +171,7 @@ fn chartGrid(
     if (capped_count == 0) return out;
 
     const cols: usize = if (area.width > area.height * options.two_column_width_height_ratio) 2 else 1;
-    const rows: usize = @divFloor(capped_count + cols - 1, cols);
+    const rows: usize = std.math.divCeil(usize, capped_count, cols) catch unreachable;
 
     const cols_f = @as(f32, @floatFromInt(cols));
     const rows_f = @as(f32, @floatFromInt(rows));
@@ -193,4 +194,94 @@ fn chartGrid(
 
 fn scaled(base: f32, ratio: f32, min_value: f32) f32 {
     return @max(min_value, base * ratio);
+}
+
+pub const ComparisonLayout = struct {
+    scenes: [cfg.max_hosts]rl.Rectangle,
+    scene_count: usize,
+    plots: [cfg.ui.chart_count]rl.Rectangle,
+    plot_count: usize,
+};
+
+pub const ComparisonLayoutOptions = struct {
+    scenes_height_ratio_single: f32 = cfg.ui.comparison_scenes_height_ratio_single,
+    scenes_height_ratio_multi: f32 = cfg.ui.comparison_scenes_height_ratio_multi,
+    scene_gap_scale: f32 = cfg.ui.comparison_scene_gap_scale,
+    plot_gap_scale: f32 = cfg.ui.comparison_plot_gap_scale,
+    plot_columns: usize = cfg.ui.comparison_plot_columns,
+};
+
+pub fn splitComparison(body: rl.Rectangle, scale: UiScale, device_count: usize, options: ComparisonLayoutOptions) ComparisonLayout {
+    var result: ComparisonLayout = .{
+        .scenes = [_]rl.Rectangle{.{ .x = body.x, .y = body.y, .width = 1.0, .height = 1.0 }} ** cfg.max_hosts,
+        .scene_count = @min(device_count, cfg.max_hosts),
+        .plots = [_]rl.Rectangle{.{ .x = body.x, .y = body.y, .width = 1.0, .height = 1.0 }} ** cfg.ui.chart_count,
+        .plot_count = cfg.ui.chart_count,
+    };
+
+    const scene_ratio = if (result.scene_count <= 1) options.scenes_height_ratio_single else options.scenes_height_ratio_multi;
+    const scenes_h = @max(1.0, body.height * scene_ratio);
+    const scenes_area = rl.Rectangle{
+        .x = body.x,
+        .y = body.y,
+        .width = @max(1.0, body.width),
+        .height = scenes_h,
+    };
+    const plots_area = rl.Rectangle{
+        .x = body.x,
+        .y = body.y + scenes_h + scale.gap,
+        .width = @max(1.0, body.width),
+        .height = @max(1.0, body.height - scenes_h - scale.gap),
+    };
+
+    result.scenes = horizontalSlices(scenes_area, result.scene_count, scale.gap * options.scene_gap_scale);
+    result.plots = fixedGrid(
+        plots_area,
+        result.plot_count,
+        @max(@as(usize, 1), options.plot_columns),
+        scale.panel_padding * options.plot_gap_scale,
+    );
+    return result;
+}
+
+fn horizontalSlices(area: rl.Rectangle, count: usize, gap: f32) [cfg.max_hosts]rl.Rectangle {
+    var out: [cfg.max_hosts]rl.Rectangle = [_]rl.Rectangle{.{ .x = area.x, .y = area.y, .width = area.width, .height = area.height }} ** cfg.max_hosts;
+    if (count == 0) return out;
+
+    const total_gap = if (count > 1) gap * @as(f32, @floatFromInt(count - 1)) else 0.0;
+    const width = @max(1.0, (area.width - total_gap) / @as(f32, @floatFromInt(count)));
+    for (0..@min(count, out.len)) |i| {
+        out[i] = .{
+            .x = area.x + @as(f32, @floatFromInt(i)) * (width + gap),
+            .y = area.y,
+            .width = width,
+            .height = area.height,
+        };
+    }
+    return out;
+}
+
+fn fixedGrid(area: rl.Rectangle, count: usize, columns: usize, gap: f32) [cfg.ui.chart_count]rl.Rectangle {
+    var out: [cfg.ui.chart_count]rl.Rectangle = [_]rl.Rectangle{.{ .x = area.x, .y = area.y, .width = 1.0, .height = 1.0 }} ** cfg.ui.chart_count;
+    const capped_count = @min(count, out.len);
+    if (capped_count == 0) return out;
+
+    const cols = @max(@as(usize, 1), @min(columns, capped_count));
+    const rows: usize = std.math.divCeil(usize, capped_count, cols) catch unreachable;
+    const cols_f = @as(f32, @floatFromInt(cols));
+    const rows_f = @as(f32, @floatFromInt(rows));
+    const cell_w = @max(1.0, (area.width - gap * @as(f32, @floatFromInt(cols - 1))) / cols_f);
+    const cell_h = @max(1.0, (area.height - gap * @as(f32, @floatFromInt(rows - 1))) / rows_f);
+
+    for (0..capped_count) |i| {
+        const row = i / cols;
+        const col = i % cols;
+        out[i] = .{
+            .x = area.x + @as(f32, @floatFromInt(col)) * (cell_w + gap),
+            .y = area.y + @as(f32, @floatFromInt(row)) * (cell_h + gap),
+            .width = cell_w,
+            .height = cell_h,
+        };
+    }
+    return out;
 }

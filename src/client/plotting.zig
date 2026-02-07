@@ -3,9 +3,10 @@ const rl = @import("raylib");
 const cfg = @import("config.zig");
 const History = @import("history.zig").History;
 
-pub const TraceDef = struct {
+pub const SeriesDef = struct {
+    history: *const History,
     kind: History.TraceKind,
-    name: []const u8,
+    label: []const u8,
     color: rl.Color,
 };
 
@@ -23,7 +24,7 @@ pub const AxisOptions = struct {
 
 pub const PlotOptions = struct {
     title: []const u8,
-    traces: []const TraceDef,
+    series: []const SeriesDef,
     x_window_seconds: f64,
     x_axis: AxisOptions,
     y_axis: AxisOptions,
@@ -87,7 +88,7 @@ pub const PlotStyle = struct {
     };
 };
 
-pub fn drawPlot(rect: rl.Rectangle, history: *const History, options: PlotOptions, style: PlotStyle) void {
+pub fn drawPlot(rect: rl.Rectangle, options: PlotOptions, style: PlotStyle) void {
     drawFrame(rect, style);
 
     const chart_rect = computeChartRect(rect, style.layout);
@@ -95,73 +96,41 @@ pub fn drawPlot(rect: rl.Rectangle, history: *const History, options: PlotOption
 
     drawPlotTitle(rect, options.title, style, min_dim);
 
-    if (chart_rect.width <= 1 or chart_rect.height <= 1 or history.len < options.min_samples or options.x_window_seconds <= 0 or options.traces.len == 0) {
+    if (chart_rect.width <= 1 or chart_rect.height <= 1 or options.x_window_seconds <= 0 or options.series.len == 0) {
         drawEmptyState(chart_rect, options.empty_message, style, min_dim);
         return;
     }
 
-    const latest_t = history.latestTimestamp() orelse {
-        drawEmptyState(chart_rect, options.empty_message, style, min_dim);
-        return;
-    };
-
-    const x_domain: AxisDomain = .{ .min = latest_t - options.x_window_seconds, .max = latest_t };
-    const range = history.rangeByTimestamp(x_domain.min, x_domain.max);
-    if (range.isEmpty()) {
-        drawEmptyState(chart_rect, options.empty_message, style, min_dim);
-        return;
-    }
+    const x_domain: AxisDomain = if (options.x_labels_relative_to_latest)
+        .{ .min = -options.x_window_seconds, .max = 0 }
+    else
+        .{ .min = absoluteLatest(options.series) - options.x_window_seconds, .max = absoluteLatest(options.series) };
 
     const y_domain = switch (options.y_domain) {
-        .dynamic => computeYDomain(history, range, options.traces, cfg.plot.y_padding_fraction) orelse {
+        .dynamic => computeYDomain(options.series, x_domain, options.x_labels_relative_to_latest, cfg.plot.y_padding_fraction) orelse {
             drawEmptyState(chart_rect, options.empty_message, style, min_dim);
             return;
         },
         .fixed => |domain| domain,
     };
 
+    const points = countVisiblePoints(options.series, x_domain, options.x_labels_relative_to_latest);
+    if (points < options.min_samples) {
+        drawEmptyState(chart_rect, options.empty_message, style, min_dim);
+        return;
+    }
+
     drawGrid(chart_rect, options.x_axis.graduation_count, options.y_axis.graduation_count, style, min_dim);
-    drawAxisGraduations(.x, chart_rect, x_domain, options.x_axis, style, min_dim, if (options.x_labels_relative_to_latest) x_domain.max else null);
-    drawAxisGraduations(.y, chart_rect, y_domain, options.y_axis, style, min_dim, null);
+    drawAxisGraduations(.x, chart_rect, x_domain, options.x_axis, style, min_dim);
+    drawAxisGraduations(.y, chart_rect, y_domain, options.y_axis, style, min_dim);
     drawAxisLabels(rect, chart_rect, options, style, min_dim);
 
-    drawTraces(history, range, options.traces, chart_rect, x_domain, y_domain, style, min_dim);
+    drawSeries(options.series, chart_rect, x_domain, y_domain, options.x_labels_relative_to_latest, style, min_dim);
 
-    if (options.show_legend) {
-        drawLegend(rect, options.traces, style, min_dim);
-    }
+    if (options.show_legend) drawLegend(rect, options.series, style, min_dim);
 }
 
-pub fn drawAxisGraduations(axis: Axis, chart_rect: rl.Rectangle, domain: AxisDomain, axis_options: AxisOptions, style: PlotStyle, min_dim: f32, x_relative_origin: ?f64) void {
-    const count = @max(axis_options.graduation_count, 1);
-    const tick_len = @max(2.0, min_dim * style.layout.tick_length_ratio);
-    const tick_font = fontSize(min_dim, style.typography.tick_label_size_ratio, style.typography.min_font_px);
-
-    var i: usize = 0;
-    while (i <= count) : (i += 1) {
-        const t = @as(f32, @floatFromInt(i)) / @as(f32, @floatFromInt(count));
-        const value = lerpF64(domain.min, domain.max, @as(f64, @floatCast(t)));
-
-        switch (axis) {
-            .x => {
-                const x = chart_rect.x + chart_rect.width * t;
-                rl.drawLineEx(.{ .x = x, .y = chart_rect.y + chart_rect.height }, .{ .x = x, .y = chart_rect.y + chart_rect.height + tick_len }, lineThickness(min_dim, style.stroke.grid_ratio), style.palette.axis);
-                const display = if (x_relative_origin) |origin| value - origin else value;
-                drawTickValue(display, axis_options.label_format, @intFromFloat(x - 18), @intFromFloat(chart_rect.y + chart_rect.height + tick_len + 2), tick_font, style.palette.tick);
-            },
-            .y => {
-                const y = chart_rect.y + chart_rect.height * (1.0 - t);
-                rl.drawLineEx(.{ .x = chart_rect.x - tick_len, .y = y }, .{ .x = chart_rect.x, .y = y }, lineThickness(min_dim, style.stroke.grid_ratio), style.palette.axis);
-                drawTickValue(value, axis_options.label_format, @intFromFloat(chart_rect.x - tick_len - 44), @intFromFloat(y - @as(f32, @floatFromInt(tick_font)) * 0.5), tick_font, style.palette.tick);
-            },
-        }
-    }
-}
-
-const Axis = enum {
-    x,
-    y,
-};
+const Axis = enum { x, y };
 
 pub const AxisDomain = struct {
     min: f64,
@@ -179,7 +148,6 @@ fn computeChartRect(rect: rl.Rectangle, layout: PlotStyle.Layout) rl.Rectangle {
     const right_pad = rect.width * layout.right_padding_ratio;
     const top_pad = rect.height * layout.top_padding_ratio;
     const bottom_pad = rect.height * layout.bottom_padding_ratio;
-
     return .{
         .x = rect.x + left_pad,
         .y = rect.y + top_pad,
@@ -189,11 +157,11 @@ fn computeChartRect(rect: rl.Rectangle, layout: PlotStyle.Layout) rl.Rectangle {
 }
 
 fn drawPlotTitle(rect: rl.Rectangle, title: []const u8, style: PlotStyle, min_dim: f32) void {
-    const title_font = fontSize(min_dim, style.typography.title_size_ratio, style.typography.min_font_px);
+    const font = fontSize(min_dim, style.typography.title_size_ratio, style.typography.min_font_px);
     const y = rect.y + rect.height * style.layout.title_offset_ratio;
-    const title_w = measureTextSlice(title, title_font);
-    const centered_x = rect.x + (rect.width - @as(f32, @floatFromInt(title_w))) * 0.5;
-    drawTextSlice(title, @intFromFloat(centered_x), @intFromFloat(y), title_font, style.palette.title);
+    const w = measureTextSlice(title, font);
+    const x = rect.x + (rect.width - @as(f32, @floatFromInt(w))) * 0.5;
+    drawTextSlice(title, @intFromFloat(x), @intFromFloat(y), font, style.palette.title);
 }
 
 fn drawEmptyState(chart_rect: rl.Rectangle, text: []const u8, style: PlotStyle, min_dim: f32) void {
@@ -201,32 +169,56 @@ fn drawEmptyState(chart_rect: rl.Rectangle, text: []const u8, style: PlotStyle, 
     drawTextSlice(text, @intFromFloat(chart_rect.x + chart_rect.width * 0.03), @intFromFloat(chart_rect.y + chart_rect.height * 0.5), font, style.palette.empty_text);
 }
 
-fn computeYDomain(history: *const History, range: History.LogicalRange, traces: []const TraceDef, y_padding_fraction: f32) ?AxisDomain {
+fn absoluteLatest(series: []const SeriesDef) f64 {
+    var latest: f64 = 0;
+    var has_value = false;
+    for (series) |s| {
+        const ts = s.history.latestTimestamp() orelse continue;
+        if (!has_value or ts > latest) {
+            latest = ts;
+            has_value = true;
+        }
+    }
+    return latest;
+}
+
+fn countVisiblePoints(series: []const SeriesDef, x_domain: AxisDomain, relative: bool) usize {
+    var count: usize = 0;
+    for (series) |s| {
+        const latest_ts = s.history.latestTimestamp() orelse continue;
+        for (0..s.history.len) |i| {
+            const sample = s.history.sample(i);
+            const x = if (relative) sample.timestamp - latest_ts else sample.timestamp;
+            if (x >= x_domain.min and x <= x_domain.max) count += 1;
+        }
+    }
+    return count;
+}
+
+fn computeYDomain(series: []const SeriesDef, x_domain: AxisDomain, relative: bool, y_padding_fraction: f32) ?AxisDomain {
     var min_v: f32 = std.math.inf(f32);
     var max_v: f32 = -std.math.inf(f32);
 
-    for (range.start..range.end) |logical_index| {
-        for (traces) |trace| {
-            const v = history.value(logical_index, trace.kind);
+    for (series) |s| {
+        const latest_ts = s.history.latestTimestamp() orelse continue;
+        for (0..s.history.len) |i| {
+            const sample = s.history.sample(i);
+            const x = if (relative) sample.timestamp - latest_ts else sample.timestamp;
+            if (x < x_domain.min or x > x_domain.max) continue;
+            const v = s.history.value(i, s.kind);
             min_v = @min(min_v, v);
             max_v = @max(max_v, v);
         }
     }
 
     if (!std.math.isFinite(min_v) or !std.math.isFinite(max_v)) return null;
-
     if (@abs(max_v - min_v) < 1e-6) {
         min_v -= 1;
         max_v += 1;
     }
-
     const span = max_v - min_v;
     const pad = span * @max(0.0, y_padding_fraction);
-
-    return .{
-        .min = min_v - pad,
-        .max = max_v + pad,
-    };
+    return .{ .min = min_v - pad, .max = max_v + pad };
 }
 
 fn drawGrid(chart_rect: rl.Rectangle, x_graduations: usize, y_graduations: usize, style: PlotStyle, min_dim: f32) void {
@@ -251,74 +243,95 @@ fn drawGrid(chart_rect: rl.Rectangle, x_graduations: usize, y_graduations: usize
     rl.drawRectangleLinesEx(chart_rect, thickness, style.palette.axis);
 }
 
+fn drawAxisGraduations(axis: Axis, chart_rect: rl.Rectangle, domain: AxisDomain, axis_options: AxisOptions, style: PlotStyle, min_dim: f32) void {
+    const count = @max(axis_options.graduation_count, 1);
+    const tick_len = @max(2.0, min_dim * style.layout.tick_length_ratio);
+    const tick_font = fontSize(min_dim, style.typography.tick_label_size_ratio, style.typography.min_font_px);
+
+    var i: usize = 0;
+    while (i <= count) : (i += 1) {
+        const t = @as(f32, @floatFromInt(i)) / @as(f32, @floatFromInt(count));
+        const value = lerpF64(domain.min, domain.max, @as(f64, @floatCast(t)));
+
+        switch (axis) {
+            .x => {
+                const x = chart_rect.x + chart_rect.width * t;
+                rl.drawLineEx(.{ .x = x, .y = chart_rect.y + chart_rect.height }, .{ .x = x, .y = chart_rect.y + chart_rect.height + tick_len }, lineThickness(min_dim, style.stroke.grid_ratio), style.palette.axis);
+                drawTickValue(value, axis_options.label_format, @intFromFloat(x - 18), @intFromFloat(chart_rect.y + chart_rect.height + tick_len + 2), tick_font, style.palette.tick);
+            },
+            .y => {
+                const y = chart_rect.y + chart_rect.height * (1.0 - t);
+                rl.drawLineEx(.{ .x = chart_rect.x - tick_len, .y = y }, .{ .x = chart_rect.x, .y = y }, lineThickness(min_dim, style.stroke.grid_ratio), style.palette.axis);
+                drawTickValue(value, axis_options.label_format, @intFromFloat(chart_rect.x - tick_len - 44), @intFromFloat(y - @as(f32, @floatFromInt(tick_font)) * 0.5), tick_font, style.palette.tick);
+            },
+        }
+    }
+}
+
 fn drawAxisLabels(rect: rl.Rectangle, chart_rect: rl.Rectangle, options: PlotOptions, style: PlotStyle, min_dim: f32) void {
     const font = fontSize(min_dim, style.typography.axis_label_size_ratio, style.typography.min_font_px);
     if (options.show_x_axis_label and options.x_axis.label.len > 0) {
-        const x_y = chart_rect.y + chart_rect.height + rect.height * style.layout.axis_label_offset_ratio;
-        const x_x = chart_rect.x + chart_rect.width * 0.45;
-        drawTextSlice(options.x_axis.label, @intFromFloat(x_x), @intFromFloat(x_y), font, style.palette.label);
+        drawTextSlice(options.x_axis.label, @intFromFloat(chart_rect.x + chart_rect.width * 0.45), @intFromFloat(chart_rect.y + chart_rect.height + rect.height * style.layout.axis_label_offset_ratio), font, style.palette.label);
     }
-
     if (options.show_y_axis_label and options.y_axis.label.len > 0) {
-        const y_x = chart_rect.x - rect.width * style.layout.axis_label_offset_ratio * 2.5;
-        const y_y = chart_rect.y - @as(f32, @floatFromInt(font));
-        drawTextSlice(options.y_axis.label, @intFromFloat(y_x), @intFromFloat(y_y), font, style.palette.label);
+        drawTextSlice(options.y_axis.label, @intFromFloat(chart_rect.x - rect.width * style.layout.axis_label_offset_ratio * 2.5), @intFromFloat(chart_rect.y - @as(f32, @floatFromInt(font))), font, style.palette.label);
     }
 }
 
-fn drawTraces(history: *const History, range: History.LogicalRange, traces: []const TraceDef, chart_rect: rl.Rectangle, x_domain: AxisDomain, y_domain: AxisDomain, style: PlotStyle, min_dim: f32) void {
+fn drawSeries(series: []const SeriesDef, chart_rect: rl.Rectangle, x_domain: AxisDomain, y_domain: AxisDomain, relative: bool, style: PlotStyle, min_dim: f32) void {
     beginChartClip(chart_rect);
     defer rl.endScissorMode();
 
-    for (traces) |trace| {
-        drawTrace(history, range, trace, chart_rect, x_domain, y_domain, style, min_dim);
-    }
+    for (series) |s| drawOneSeries(s, chart_rect, x_domain, y_domain, relative, style, min_dim);
 }
 
-fn drawTrace(history: *const History, range: History.LogicalRange, trace: TraceDef, chart_rect: rl.Rectangle, x_domain: AxisDomain, y_domain: AxisDomain, style: PlotStyle, min_dim: f32) void {
+fn drawOneSeries(s: SeriesDef, chart_rect: rl.Rectangle, x_domain: AxisDomain, y_domain: AxisDomain, relative: bool, style: PlotStyle, min_dim: f32) void {
     var prev: ?rl.Vector2 = null;
     const thickness = lineThickness(min_dim, style.stroke.trace_ratio);
+    const latest_ts = s.history.latestTimestamp() orelse return;
 
-    for (range.start..range.end) |logical_index| {
-        const s = history.sample(logical_index);
+    for (0..s.history.len) |i| {
+        const sample = s.history.sample(i);
+        const x_value = if (relative) sample.timestamp - latest_ts else sample.timestamp;
+        if (x_value < x_domain.min or x_value > x_domain.max) continue;
 
-        const x_norm = @as(f32, @floatCast((s.timestamp - x_domain.min) / (x_domain.max - x_domain.min)));
-        const value = history.value(logical_index, trace.kind);
+        const x_norm = @as(f32, @floatCast((x_value - x_domain.min) / (x_domain.max - x_domain.min)));
+        const value = s.history.value(i, s.kind);
         const y_norm = @as(f32, @floatCast((@as(f64, value) - y_domain.min) / (y_domain.max - y_domain.min)));
-
         const point = rl.Vector2{
             .x = chart_rect.x + chart_rect.width * clamp01(x_norm),
             .y = chart_rect.y + chart_rect.height * (1.0 - clamp01(y_norm)),
         };
-
-        if (prev) |last| {
-            rl.drawLineEx(last, point, thickness, trace.color);
-        }
+        if (prev) |p| rl.drawLineEx(p, point, thickness, s.color);
         prev = point;
     }
 }
 
-fn beginChartClip(chart_rect: rl.Rectangle) void {
-    const x = @as(i32, @intFromFloat(@floor(chart_rect.x)));
-    const y = @as(i32, @intFromFloat(@floor(chart_rect.y)));
-    const w = @max(1, @as(i32, @intFromFloat(@ceil(chart_rect.width))));
-    const h = @max(1, @as(i32, @intFromFloat(@ceil(chart_rect.height))));
-    rl.beginScissorMode(x, y, w, h);
-}
+fn drawLegend(rect: rl.Rectangle, series: []const SeriesDef, style: PlotStyle, min_dim: f32) void {
+    if (series.len == 0) return;
 
-fn drawLegend(rect: rl.Rectangle, traces: []const TraceDef, style: PlotStyle, min_dim: f32) void {
     const font = fontSize(min_dim, style.typography.legend_size_ratio, style.typography.min_font_px);
-    const swatch_size = @max(6, @as(i32, @intFromFloat(@as(f32, @floatFromInt(font)) * 0.8)));
-    const y = rect.y + rect.height - rect.height * style.layout.legend_offset_ratio;
-    var x = rect.x + rect.width * 0.02;
-
+    const title_font = fontSize(min_dim, style.typography.title_size_ratio, style.typography.min_font_px);
+    const swatch = @max(6, @as(i32, @intFromFloat(@as(f32, @floatFromInt(font)) * 0.8)));
     const gap = rect.width * style.layout.legend_item_gap_ratio;
-    for (traces) |trace| {
-        rl.drawRectangle(@intFromFloat(x), @intFromFloat(y - @as(f32, @floatFromInt(swatch_size))), swatch_size, swatch_size, trace.color);
-        drawTextSlice(trace.name, @intFromFloat(x + @as(f32, @floatFromInt(swatch_size + 4))), @intFromFloat(y - @as(f32, @floatFromInt(swatch_size + 2))), font, style.palette.legend_text);
+    const y = rect.y +
+        rect.height * (style.layout.title_offset_ratio + style.layout.legend_offset_ratio) +
+        @as(f32, @floatFromInt(title_font));
 
-        const name_px = @as(f32, @floatFromInt(measureTextSlice(trace.name, font)));
-        x += @as(f32, @floatFromInt(swatch_size)) + 6 + name_px + gap;
+    var total_w: f32 = 0.0;
+    for (series, 0..) |s, i| {
+        total_w += @as(f32, @floatFromInt(swatch + 4 + measureTextSlice(s.label, font)));
+        if (i + 1 < series.len) total_w += gap;
+    }
+
+    const right_pad = rect.width * style.layout.right_padding_ratio;
+    var x = rect.x + rect.width - right_pad - total_w;
+    if (x < rect.x) x = rect.x;
+
+    for (series) |s| {
+        rl.drawRectangle(@intFromFloat(x), @intFromFloat(y - @as(f32, @floatFromInt(swatch))), swatch, swatch, s.color);
+        drawTextSlice(s.label, @intFromFloat(x + @as(f32, @floatFromInt(swatch + 4))), @intFromFloat(y - @as(f32, @floatFromInt(swatch + 2))), font, style.palette.legend_text);
+        x += @as(f32, @floatFromInt(swatch)) + 6 + @as(f32, @floatFromInt(measureTextSlice(s.label, font))) + gap;
     }
 }
 
@@ -330,6 +343,15 @@ fn drawTickValue(value: f64, format: LabelFormat, x: i32, y: i32, font: i32, col
         .fixed2 => std.fmt.bufPrintZ(&buf, "{d:.2}", .{value}) catch return,
     };
     rl.drawText(text, x, y, font, color);
+}
+
+fn beginChartClip(chart_rect: rl.Rectangle) void {
+    rl.beginScissorMode(
+        @as(i32, @intFromFloat(@floor(chart_rect.x))),
+        @as(i32, @intFromFloat(@floor(chart_rect.y))),
+        @max(1, @as(i32, @intFromFloat(@ceil(chart_rect.width)))),
+        @max(1, @as(i32, @intFromFloat(@ceil(chart_rect.height)))),
+    );
 }
 
 fn drawTextSlice(text: []const u8, x: i32, y: i32, size: i32, color: rl.Color) void {

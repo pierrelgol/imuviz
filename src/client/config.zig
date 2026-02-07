@@ -92,6 +92,10 @@ pub const renderer = struct {
     pub const scene_bg = color(18, 20, 24, 255);
     pub const scene_sphere_fill = color(165, 168, 176, 220);
     pub const scene_sphere_wire = color(88, 93, 106, 255);
+    pub const scene_imu_arrow = color(247, 210, 72, 255);
+    pub const scene_ref_x = color(210, 78, 78, 255);
+    pub const scene_ref_y = color(80, 214, 124, 255);
+    pub const scene_ref_z = color(86, 166, 245, 255);
     pub const trace_gyro_norm = color(230, 126, 247, 255);
 };
 
@@ -118,6 +122,11 @@ pub const ui = struct {
     pub const charts_gap_scale: f32 = 0.7;
 
     pub const charts_two_column_width_height_ratio: f32 = 0.9;
+    pub const comparison_scenes_height_ratio_single: f32 = 0.44;
+    pub const comparison_scenes_height_ratio_multi: f32 = 0.48;
+    pub const comparison_scene_gap_scale: f32 = 1.0;
+    pub const comparison_plot_gap_scale: f32 = 0.7;
+    pub const comparison_plot_columns: usize = 2;
 };
 
 pub const scene3d = struct {
@@ -131,8 +140,11 @@ pub const scene3d = struct {
     pub const sphere_radius: f32 = 0.52;
     pub const grid_slices: i32 = 12;
     pub const grid_spacing: f32 = 0.5;
+    pub const reference_height: f32 = 0.05;
+    pub const reference_inset: f32 = 0.25;
+    pub const reference_axis_length: f32 = 0.9;
 
-    pub const axis_shaft_start: f32 = 0.56;
+    pub const axis_shaft_start: f32 = 0.0;
     pub const axis_shaft_end: f32 = 1.55;
     pub const axis_head_start: f32 = 1.55;
     pub const axis_head_end: f32 = 1.82;
