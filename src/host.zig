@@ -90,8 +90,9 @@ const Server = struct {
             linux.SOCK.CLOEXEC,
         );
 
-        if (client_fd < 0) {
-            return switch (linux.getErrno(@intCast(client_fd))) {
+        if (client_fd > @as(usize, @bitCast(@as(isize, -4096)))) {
+            const errno = @as(usize, @bitCast(-@as(isize, @bitCast(client_fd))));
+            return switch (@as(linux.E, @enumFromInt(errno))) {
                 .AGAIN => error.WouldBlock,
                 .INTR => error.Interrupted,
                 .CONNABORTED => error.ConnectionAborted,
@@ -214,10 +215,6 @@ pub fn main(init: std.process.Init) !void {
     };
     defer shm_mmap.destroy(io);
 
-    var shm_read_buffer: [REPORT_BYTE_SIZE]u8 = undefined;
-    var shm_file_reader: Io.File.Reader = .init(shm_file, io, &shm_read_buffer);
-    const shm_reader: *Io.Reader = &shm_file_reader.interface;
-
     var server: Server = .init;
     defer server.deinit(io);
 
@@ -307,7 +304,8 @@ pub fn main(init: std.process.Init) !void {
         },
         .new_data => {
             log.debug("State: new_data - deserializing report", .{});
-            const report = common.Report.deserialize(shm_reader, builtin.cpu.arch.endian()) catch |err| {
+            var shm_fixed_reader: Io.Reader = .fixed(shm_mmap.memory[0..REPORT_BYTE_SIZE]);
+            const report = common.Report.deserialize(&shm_fixed_reader, builtin.cpu.arch.endian()) catch |err| {
                 log.err("Failed to deserialize report: {}", .{err});
                 continue :state .wait;
             };
@@ -318,11 +316,10 @@ pub fn main(init: std.process.Init) !void {
                 continue :state .client_disconnected;
             };
 
-            report.format(writer) catch |err| {
-                log.err("Failed to format report: {}", .{err});
+            writer.print("{f}", .{report}) catch |err| {
+                log.err("Failed to serialize report to JSON: {}", .{err});
                 continue :state .client_disconnected;
             };
-            log.debug("Report formatted and written to buffer", .{});
 
             writer.writeByte('\n') catch |err| {
                 log.err("Failed to write to client: {}", .{err});
@@ -351,7 +348,7 @@ pub fn main(init: std.process.Init) !void {
             log.debug("State: wait - sleeping 1ms (client connected)", .{});
             if (should_stop.load(.acquire)) return;
 
-            Io.sleep(io, Io.Duration.fromMilliseconds(1), .real) catch |err| {
+            Io.sleep(io, Io.Duration.fromMilliseconds(4), .real) catch |err| {
                 if (err == error.Canceled) return;
                 return err;
             };
