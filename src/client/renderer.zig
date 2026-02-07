@@ -274,13 +274,14 @@ fn drawSceneCard(target: *scene3d.SceneTarget, rect: rl.Rectangle, scale: ui.UiS
 
     const pad = scale.panel_padding;
     const header_top = rect.y + pad * cfg.renderer.panel_title_padding_scale;
-    drawTextFmt(
-        "{s}",
-        .{device.title},
+    var title_buf: [128]u8 = undefined;
+    const title_text = formatDeviceTitle(&title_buf, device);
+    rl.drawText(
+        title_text,
         @intFromFloat(rect.x + pad),
         @intFromFloat(header_top),
         cfg.renderer.panel_title_size,
-        cfg.theme.text_primary,
+        pingColor(device.snapshot.ping_rtt_ms, device.snapshot.state),
     );
 
     const status = statusMeta(device.snapshot.state);
@@ -499,4 +500,18 @@ fn pointInRect(p: rl.Vector2, rect: rl.Rectangle) bool {
 
 fn nowMs() f64 {
     return rl.getTime() * 1000.0;
+}
+
+fn formatDeviceTitle(buf: *[128]u8, device: DeviceFrame) [:0]const u8 {
+    if (device.snapshot.ping_rtt_ms >= 0.0 and device.snapshot.state == .connected) {
+        return std.fmt.bufPrintZ(buf, "{s} ({d:.1} ms)", .{ device.title, device.snapshot.ping_rtt_ms }) catch "device";
+    }
+    return std.fmt.bufPrintZ(buf, "{s} (n/a)", .{device.title}) catch "device";
+}
+
+fn pingColor(ping_ms: f32, state: net.ConnectionState) rl.Color {
+    if (state != .connected or ping_ms < 0.0) return cfg.renderer.ping_color_na;
+    if (ping_ms <= cfg.renderer.ping_good_ms) return cfg.renderer.ping_color_good;
+    if (ping_ms <= cfg.renderer.ping_warn_ms) return cfg.renderer.ping_color_warn;
+    return cfg.renderer.ping_color_bad;
 }

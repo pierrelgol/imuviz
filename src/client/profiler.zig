@@ -113,7 +113,9 @@ pub const Overlay = struct {
 
         drawMemoryGraph(self, panel, y);
         y += cfg.profiler.graph_height + cfg.profiler.network_graph_gap;
-        drawNetworkGraph(self, panel, y);
+        drawNetworkThroughputGraph(self, panel, y);
+        y += cfg.profiler.network_graph_height + cfg.profiler.network_graph_split_gap;
+        drawNetworkLatencyGraph(self, panel, y);
     }
 };
 
@@ -128,6 +130,8 @@ fn panelRect() rl.Rectangle {
             cfg.profiler.graph_top_gap +
             cfg.profiler.graph_height +
             cfg.profiler.network_graph_gap +
+            cfg.profiler.network_graph_height +
+            cfg.profiler.network_graph_split_gap +
             cfg.profiler.network_graph_height,
     };
 }
@@ -194,39 +198,41 @@ fn drawTimingGraph(self: *const Overlay, panel: rl.Rectangle, y: f32, budget_ms:
     };
     rl.drawRectangleRec(graph, cfg.profiler.graph_fill);
     rl.drawRectangleLinesEx(graph, 1.0, cfg.profiler.graph_border);
-
-    drawTimingLegend(graph);
-    if (self.timing_len < 2) return;
+    const plot = graphPlotRect(graph);
 
     var max_ms: f32 = @max(1.0, budget_ms * 1.25);
-    for (0..timing_series_count) |s| {
-        for (0..self.timing_len) |i| {
-            const idx = (self.timing_head + cfg.profiler.memory_samples - self.timing_len + i) % cfg.profiler.memory_samples;
-            max_ms = @max(max_ms, self.timing_samples[s][idx]);
+    if (self.timing_len >= 2) {
+        for (0..timing_series_count) |s| {
+            for (0..self.timing_len) |i| {
+                const idx = (self.timing_head + cfg.profiler.memory_samples - self.timing_len + i) % cfg.profiler.memory_samples;
+                max_ms = @max(max_ms, self.timing_samples[s][idx]);
+            }
         }
     }
+    drawGraphGridAndAxes(graph, plot, max_ms, "ms");
+    drawTimingLegend(plot);
+    if (self.timing_len < 2) return;
 
-    const top = graph.y + 14.0;
-    const h = @max(1.0, graph.height - 16.0);
     if (budget_ms > 0.0) {
-        const by = top + h * (1.0 - @min(1.0, budget_ms / max_ms));
-        rl.drawLineEx(.{ .x = graph.x, .y = by }, .{ .x = graph.x + graph.width, .y = by }, 1.0, cfg.profiler.budget_line);
+        const by = plot.y + plot.height * (1.0 - @min(1.0, budget_ms / max_ms));
+        rl.drawLineEx(.{ .x = plot.x, .y = by }, .{ .x = plot.x + plot.width, .y = by }, 1.0, cfg.profiler.budget_line);
     }
 
-    drawTimingSeries(self, graph, top, h, max_ms, 0, cfg.profiler.frame_line);
-    drawTimingSeries(self, graph, top, h, max_ms, 1, cfg.profiler.input_line);
-    drawTimingSeries(self, graph, top, h, max_ms, 2, cfg.profiler.drain_line);
-    drawTimingSeries(self, graph, top, h, max_ms, 3, cfg.profiler.renderer_line);
-    drawTimingSeries(self, graph, top, h, max_ms, 4, cfg.profiler.menu_line);
+    drawTimingSeries(self, plot, max_ms, 0, cfg.profiler.frame_line);
+    drawTimingSeries(self, plot, max_ms, 1, cfg.profiler.input_line);
+    drawTimingSeries(self, plot, max_ms, 2, cfg.profiler.drain_line);
+    drawTimingSeries(self, plot, max_ms, 3, cfg.profiler.renderer_line);
+    drawTimingSeries(self, plot, max_ms, 4, cfg.profiler.menu_line);
 }
 
-fn drawTimingLegend(graph: rl.Rectangle) void {
-    const y = graph.y + 2.0;
-    drawLegendEntry(graph.x + 4.0, y, "frame", cfg.profiler.frame_line);
-    drawLegendEntry(graph.x + 62.0, y, "input", cfg.profiler.input_line);
-    drawLegendEntry(graph.x + 114.0, y, "drain", cfg.profiler.drain_line);
-    drawLegendEntry(graph.x + 166.0, y, "render", cfg.profiler.renderer_line);
-    drawLegendEntry(graph.x + 225.0, y, "menu", cfg.profiler.menu_line);
+fn drawTimingLegend(plot: rl.Rectangle) void {
+    const y = plot.y - cfg.profiler.legend_y_offset;
+    const x0 = plot.x + cfg.profiler.legend_x_start;
+    drawLegendEntry(x0 + cfg.profiler.legend_item_gap * 0.0, y, "frame", cfg.profiler.frame_line);
+    drawLegendEntry(x0 + cfg.profiler.legend_item_gap * 1.0, y, "input", cfg.profiler.input_line);
+    drawLegendEntry(x0 + cfg.profiler.legend_item_gap * 2.0, y, "drain", cfg.profiler.drain_line);
+    drawLegendEntry(x0 + cfg.profiler.legend_item_gap * 3.0, y, "render", cfg.profiler.renderer_line);
+    drawLegendEntry(x0 + cfg.profiler.legend_item_gap * 4.0, y, "menu", cfg.profiler.menu_line);
 }
 
 fn drawLegendEntry(x: f32, y: f32, text: []const u8, color: rl.Color) void {
@@ -236,7 +242,7 @@ fn drawLegendEntry(x: f32, y: f32, text: []const u8, color: rl.Color) void {
     rl.drawText(z, @intFromFloat(x + 9.0), @intFromFloat(y), cfg.profiler.panel_text_size, cfg.profiler.text_muted);
 }
 
-fn drawTimingSeries(self: *const Overlay, graph: rl.Rectangle, top: f32, h: f32, max_ms: f32, series_idx: usize, color: rl.Color) void {
+fn drawTimingSeries(self: *const Overlay, plot: rl.Rectangle, max_ms: f32, series_idx: usize, color: rl.Color) void {
     var prev: ?rl.Vector2 = null;
     const denom = @as(f32, @floatFromInt(@max(self.timing_len - 1, 1)));
     for (0..self.timing_len) |i| {
@@ -245,8 +251,8 @@ fn drawTimingSeries(self: *const Overlay, graph: rl.Rectangle, top: f32, h: f32,
         const x_norm = @as(f32, @floatFromInt(i)) / denom;
         const y_norm = @min(1.0, @max(0.0, ms / max_ms));
         const p: rl.Vector2 = .{
-            .x = graph.x + graph.width * x_norm,
-            .y = top + h * (1.0 - y_norm),
+            .x = plot.x + plot.width * x_norm,
+            .y = plot.y + plot.height * (1.0 - y_norm),
         };
         if (prev) |q| rl.drawLineEx(q, p, 1.0, color);
         prev = p;
@@ -262,6 +268,10 @@ fn drawMemoryGraph(self: *const Overlay, panel: rl.Rectangle, y: f32) void {
     };
     rl.drawRectangleRec(graph, cfg.profiler.graph_fill);
     rl.drawRectangleLinesEx(graph, 1.0, cfg.profiler.graph_border);
+    const plot = graphPlotRect(graph);
+
+    const max_mb = bytesToMb(@max(self.memory_max_seen, 1));
+    drawGraphGridAndAxes(graph, plot, @floatCast(max_mb), "MB");
 
     var label_buf: [128]u8 = undefined;
     const latest = latestMemoryBytes(self) orelse 0;
@@ -272,7 +282,7 @@ fn drawMemoryGraph(self: *const Overlay, panel: rl.Rectangle, y: f32) void {
     ) catch return;
     rl.drawText(
         label,
-        @intFromFloat(graph.x + 4.0),
+        @intFromFloat(plot.x + 4.0),
         @intFromFloat(graph.y + 2.0),
         cfg.profiler.panel_text_size,
         cfg.profiler.text_muted,
@@ -280,8 +290,6 @@ fn drawMemoryGraph(self: *const Overlay, panel: rl.Rectangle, y: f32) void {
 
     if (self.memory_len < 2 or self.memory_max_seen == 0) return;
 
-    const usable_top = graph.y + 16.0;
-    const usable_h = @max(1.0, graph.height - 18.0);
     const denom = @as(f32, @floatFromInt(@max(self.memory_len - 1, 1)));
 
     var prev: ?rl.Vector2 = null;
@@ -291,15 +299,15 @@ fn drawMemoryGraph(self: *const Overlay, panel: rl.Rectangle, y: f32) void {
         const x_norm = @as(f32, @floatFromInt(i)) / denom;
         const y_norm = @as(f32, @floatFromInt(mem)) / @as(f32, @floatFromInt(self.memory_max_seen));
         const p: rl.Vector2 = .{
-            .x = graph.x + graph.width * x_norm,
-            .y = usable_top + usable_h * (1.0 - @max(0.0, @min(1.0, y_norm))),
+            .x = plot.x + plot.width * x_norm,
+            .y = plot.y + plot.height * (1.0 - @max(0.0, @min(1.0, y_norm))),
         };
         if (prev) |q| rl.drawLineEx(q, p, 1.0, cfg.profiler.graph_line);
         prev = p;
     }
 }
 
-fn drawNetworkGraph(self: *const Overlay, panel: rl.Rectangle, y: f32) void {
+fn drawNetworkThroughputGraph(self: *const Overlay, panel: rl.Rectangle, y: f32) void {
     const graph = rl.Rectangle{
         .x = panel.x + cfg.profiler.panel_padding,
         .y = y,
@@ -308,45 +316,140 @@ fn drawNetworkGraph(self: *const Overlay, panel: rl.Rectangle, y: f32) void {
     };
     rl.drawRectangleRec(graph, cfg.profiler.graph_fill);
     rl.drawRectangleLinesEx(graph, 1.0, cfg.profiler.graph_border);
+    const plot = graphPlotRect(graph);
+    var max_kbps: f32 = 1.0;
+    if (self.net_len >= 2 and self.net_device_count > 0) {
+        for (0..self.net_device_count) |d| {
+            for (0..self.net_len) |i| {
+                const idx = (self.net_head + cfg.profiler.memory_samples - self.net_len + i) % cfg.profiler.memory_samples;
+                max_kbps = @max(max_kbps, self.net_throughput_kbps[d][idx]);
+            }
+        }
+    }
+    drawGraphGridAndAxes(graph, plot, max_kbps, "KB/s");
     if (self.net_len < 2 or self.net_device_count == 0) return;
 
     var label_buf: [96]u8 = undefined;
-    const label = std.fmt.bufPrintZ(&label_buf, "net (KB/s solid, ms dashed)", .{}) catch return;
-    rl.drawText(label, @intFromFloat(graph.x + 4.0), @intFromFloat(graph.y + 2.0), cfg.profiler.panel_text_size, cfg.profiler.text_muted);
+    const label = std.fmt.bufPrintZ(&label_buf, "net throughput", .{}) catch return;
+    rl.drawText(label, @intFromFloat(plot.x + 4.0), @intFromFloat(graph.y + 2.0), cfg.profiler.panel_text_size, cfg.profiler.text_muted);
 
-    var max_kbps: f32 = 1.0;
-    var max_lat_ms: f32 = 1.0;
-    for (0..self.net_device_count) |d| {
-        for (0..self.net_len) |i| {
-            const idx = (self.net_head + cfg.profiler.memory_samples - self.net_len + i) % cfg.profiler.memory_samples;
-            max_kbps = @max(max_kbps, self.net_throughput_kbps[d][idx]);
-            max_lat_ms = @max(max_lat_ms, self.net_latency_ms[d][idx]);
-        }
-    }
-    const top = graph.y + 14.0;
-    const h = @max(1.0, graph.height - 16.0);
-    drawNetworkSeries(self, graph, top, h, max_kbps, max_lat_ms, 0, cfg.profiler.network_line_dev1, cfg.profiler.latency_line_dev1);
+    drawNetworkThroughputSeries(self, plot, max_kbps, 0, cfg.profiler.network_line_dev1);
     if (self.net_device_count >= 2) {
-        drawNetworkSeries(self, graph, top, h, max_kbps, max_lat_ms, 1, cfg.profiler.network_line_dev2, cfg.profiler.latency_line_dev2);
+        drawNetworkThroughputSeries(self, plot, max_kbps, 1, cfg.profiler.network_line_dev2);
     }
 }
 
-fn drawNetworkSeries(self: *const Overlay, graph: rl.Rectangle, top: f32, h: f32, max_kbps: f32, max_lat_ms: f32, device_idx: usize, throughput_color: rl.Color, latency_color: rl.Color) void {
+fn drawNetworkLatencyGraph(self: *const Overlay, panel: rl.Rectangle, y: f32) void {
+    const graph = rl.Rectangle{
+        .x = panel.x + cfg.profiler.panel_padding,
+        .y = y,
+        .width = panel.width - cfg.profiler.panel_padding * 2.0,
+        .height = cfg.profiler.network_graph_height,
+    };
+    rl.drawRectangleRec(graph, cfg.profiler.graph_fill);
+    rl.drawRectangleLinesEx(graph, 1.0, cfg.profiler.graph_border);
+    const plot = graphPlotRect(graph);
+    var max_lat_ms: f32 = 1.0;
+    if (self.net_len >= 2 and self.net_device_count > 0) {
+        for (0..self.net_device_count) |d| {
+            for (0..self.net_len) |i| {
+                const idx = (self.net_head + cfg.profiler.memory_samples - self.net_len + i) % cfg.profiler.memory_samples;
+                max_lat_ms = @max(max_lat_ms, self.net_latency_ms[d][idx]);
+            }
+        }
+    }
+    drawGraphGridAndAxes(graph, plot, max_lat_ms, "ms");
+    if (self.net_len < 2 or self.net_device_count == 0) return;
+
+    var label_buf: [96]u8 = undefined;
+    const label = std.fmt.bufPrintZ(&label_buf, "net latency", .{}) catch return;
+    rl.drawText(label, @intFromFloat(plot.x + 4.0), @intFromFloat(graph.y + 2.0), cfg.profiler.panel_text_size, cfg.profiler.text_muted);
+
+    drawNetworkLatencySeries(self, plot, max_lat_ms, 0, cfg.profiler.latency_line_dev1);
+    if (self.net_device_count >= 2) {
+        drawNetworkLatencySeries(self, plot, max_lat_ms, 1, cfg.profiler.latency_line_dev2);
+    }
+}
+
+fn drawNetworkThroughputSeries(self: *const Overlay, plot: rl.Rectangle, max_kbps: f32, device_idx: usize, color: rl.Color) void {
     const denom = @as(f32, @floatFromInt(@max(self.net_len - 1, 1)));
-    var prev_bw: ?rl.Vector2 = null;
-    var prev_lat: ?rl.Vector2 = null;
+    var prev: ?rl.Vector2 = null;
     for (0..self.net_len) |i| {
         const idx = (self.net_head + cfg.profiler.memory_samples - self.net_len + i) % cfg.profiler.memory_samples;
         const x_norm = @as(f32, @floatFromInt(i)) / denom;
         const bw_norm = @min(1.0, self.net_throughput_kbps[device_idx][idx] / max_kbps);
-        const lat_norm = @min(1.0, self.net_latency_ms[device_idx][idx] / max_lat_ms);
-        const p_bw: rl.Vector2 = .{ .x = graph.x + graph.width * x_norm, .y = top + h * (1.0 - bw_norm) };
-        const p_lat: rl.Vector2 = .{ .x = graph.x + graph.width * x_norm, .y = top + h * (1.0 - lat_norm) };
-        if (prev_bw) |q| rl.drawLineEx(q, p_bw, 1.1, throughput_color);
-        if (prev_lat) |q| rl.drawLineEx(q, p_lat, 1.0, latency_color);
-        prev_bw = p_bw;
-        prev_lat = p_lat;
+        const p: rl.Vector2 = .{ .x = plot.x + plot.width * x_norm, .y = plot.y + plot.height * (1.0 - bw_norm) };
+        if (prev) |q| rl.drawLineEx(q, p, 1.1, color);
+        prev = p;
     }
+}
+
+fn drawNetworkLatencySeries(self: *const Overlay, plot: rl.Rectangle, max_lat_ms: f32, device_idx: usize, color: rl.Color) void {
+    const denom = @as(f32, @floatFromInt(@max(self.net_len - 1, 1)));
+    var prev: ?rl.Vector2 = null;
+    for (0..self.net_len) |i| {
+        const idx = (self.net_head + cfg.profiler.memory_samples - self.net_len + i) % cfg.profiler.memory_samples;
+        const x_norm = @as(f32, @floatFromInt(i)) / denom;
+        const lat_norm = @min(1.0, self.net_latency_ms[device_idx][idx] / max_lat_ms);
+        const p: rl.Vector2 = .{ .x = plot.x + plot.width * x_norm, .y = plot.y + plot.height * (1.0 - lat_norm) };
+        if (prev) |q| rl.drawLineEx(q, p, 1.0, color);
+        prev = p;
+    }
+}
+
+fn drawGraphGridAndAxes(graph: rl.Rectangle, plot: rl.Rectangle, y_max: f32, y_unit: []const u8) void {
+    const x0 = plot.x;
+    const x1 = plot.x + plot.width;
+    const y0 = plot.y + plot.height;
+    const y1 = plot.y;
+
+    const grid_x: usize = 6;
+    const grid_y: usize = 3;
+    for (0..grid_x + 1) |i| {
+        const t = @as(f32, @floatFromInt(i)) / @as(f32, @floatFromInt(grid_x));
+        const x = x0 + (x1 - x0) * t;
+        rl.drawLineEx(.{ .x = x, .y = y1 }, .{ .x = x, .y = y0 }, 1.0, cfg.profiler.graph_grid);
+    }
+    for (0..grid_y + 1) |i| {
+        const t = @as(f32, @floatFromInt(i)) / @as(f32, @floatFromInt(grid_y));
+        const y = y0 - (y0 - y1) * t;
+        rl.drawLineEx(.{ .x = x0, .y = y }, .{ .x = x1, .y = y }, 1.0, cfg.profiler.graph_grid);
+        var tick_buf: [64]u8 = undefined;
+        const value = y_max * t;
+        const tick = std.fmt.bufPrintZ(&tick_buf, "{d:.1}", .{value}) catch continue;
+        rl.drawText(
+            tick,
+            @intFromFloat(graph.x + cfg.profiler.graph_axis_text_x),
+            @intFromFloat(y - cfg.profiler.graph_axis_tick_y_offset),
+            cfg.profiler.panel_text_size - 1,
+            cfg.profiler.graph_axis_text,
+        );
+    }
+    var ylab_buf: [32]u8 = undefined;
+    const ylab = std.fmt.bufPrintZ(&ylab_buf, "y:{s}", .{y_unit}) catch return;
+    rl.drawText(
+        ylab,
+        @intFromFloat(graph.x + cfg.profiler.graph_axis_text_x),
+        @intFromFloat(graph.y + 2.0),
+        cfg.profiler.panel_text_size - 1,
+        cfg.profiler.graph_axis_text,
+    );
+    rl.drawText(
+        "x: recent -> now",
+        @intFromFloat(x1 - cfg.profiler.graph_x_label_width),
+        @intFromFloat(y0 - 12.0),
+        cfg.profiler.panel_text_size - 1,
+        cfg.profiler.graph_axis_text,
+    );
+}
+
+fn graphPlotRect(graph: rl.Rectangle) rl.Rectangle {
+    return .{
+        .x = graph.x + cfg.profiler.graph_left_gutter,
+        .y = graph.y + cfg.profiler.graph_header_height,
+        .width = @max(1.0, graph.width - cfg.profiler.graph_left_gutter - cfg.profiler.graph_right_gutter),
+        .height = @max(1.0, graph.height - cfg.profiler.graph_header_height - cfg.profiler.graph_bottom_padding),
+    };
 }
 
 fn latestMemoryBytes(self: *const Overlay) ?u64 {
