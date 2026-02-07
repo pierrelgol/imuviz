@@ -1,6 +1,6 @@
 var should_stop: Atomic(bool) = .init(false);
 
-pub const Args = struct {
+const Args = struct {
     shm_path: [:0]const u8 = "/tmp/mmapIMU",
 
     pub const init: Args = .{};
@@ -88,7 +88,7 @@ pub fn main(init: std.process.Init) !void {
         var report: common.Report = .init;
         random.bytes(report.asBytes());
 
-        io.sleep(.fromMilliseconds(5), .real) catch |err| {
+        io.sleep(.fromMilliseconds(33), .real) catch |err| {
             log.err("sleep failed: {}", .{err});
             return err;
         };
@@ -113,16 +113,14 @@ pub fn main(init: std.process.Init) !void {
             return err;
         };
 
-        report = common.Report.deserialize(shm_reader, builtin.cpu.arch.endian()) catch |err| {
-            log.err("failed to deserialize report from reader: {}", .{err});
-            return err;
-        };
-
         if (builtin.mode == .Debug) {
+            report = common.Report.deserialize(shm_reader, builtin.cpu.arch.endian()) catch |err| {
+                log.err("failed to deserialize report from reader: {}", .{err});
+                return err;
+            };
+
             std.debug.print("{f}\n", .{report});
         }
-
-        shm_reader.tossBuffered();
     }
 }
 
