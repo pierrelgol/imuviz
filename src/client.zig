@@ -178,7 +178,7 @@ pub fn main(init: std.process.Init) !void {
         defer rl.endDrawing();
 
         renderer.draw(frames[0..args.hosts.count]);
-        rl.drawFPS(14, 10);
+        rl.drawFPS(cfg.renderer.fps_x, cfg.renderer.fps_y);
     }
 }
 

@@ -64,6 +64,58 @@ pub const window_min_width: i32 = 1100;
 pub const window_min_height: i32 = 700;
 pub const target_fps: i32 = 240;
 
+pub const renderer = struct {
+    pub const panel_border_thickness: f32 = 1.0;
+    pub const status_text_size: i32 = 14;
+    pub const panel_title_size: i32 = 18;
+    pub const current_values_size: i32 = 14;
+    pub const fps_x: i32 = 14;
+    pub const fps_y: i32 = 10;
+    pub const panel_title_padding_scale: f32 = 0.8;
+    pub const status_text_x_offset: f32 = 180.0;
+    pub const status_text_y_offset: f32 = 2.0;
+    pub const current_values_bottom_offset: f32 = 24.0;
+    pub const current_values_x_offset: f32 = 12.0;
+    pub const invalid_rt_text_size: i32 = 12;
+    pub const invalid_rt_text_x_offset: f32 = 8.0;
+    pub const invalid_rt_text_y_offset: f32 = 8.0;
+    pub const min_scene_dim_px: i32 = 8;
+
+    pub const title_border = color(56, 66, 84, 255);
+    pub const panel_border = color(52, 61, 78, 255);
+    pub const status_connected = color(80, 214, 124, 255);
+    pub const status_connecting = color(247, 196, 80, 255);
+    pub const status_disconnected = color(235, 94, 94, 255);
+    pub const scene_unavailable_fill = color(24, 10, 10, 255);
+    pub const scene_unavailable_border = color(170, 70, 70, 255);
+    pub const scene_unavailable_text = color(230, 190, 190, 255);
+    pub const scene_bg = color(18, 20, 24, 255);
+    pub const scene_sphere_fill = color(165, 168, 176, 220);
+    pub const scene_sphere_wire = color(88, 93, 106, 255);
+    pub const trace_gyro_norm = color(230, 126, 247, 255);
+};
+
+pub const scene3d = struct {
+    pub const camera_pos: rl.Vector3 = .{ .x = 2.9, .y = 2.35, .z = 2.9 };
+    pub const camera_target: rl.Vector3 = .{ .x = 0.0, .y = 0.55, .z = 0.0 };
+    pub const camera_up: rl.Vector3 = .{ .x = 0.0, .y = 1.0, .z = 0.0 };
+    pub const camera_fovy: f32 = 45.0;
+
+    pub const origin: rl.Vector3 = .{ .x = 0.0, .y = 0.55, .z = 0.0 };
+    pub const sphere_center: rl.Vector3 = .{ .x = 0.0, .y = 0.55, .z = 0.0 };
+    pub const sphere_radius: f32 = 0.52;
+    pub const grid_slices: i32 = 12;
+    pub const grid_spacing: f32 = 0.5;
+
+    pub const axis_shaft_start: f32 = 0.56;
+    pub const axis_shaft_end: f32 = 1.55;
+    pub const axis_head_start: f32 = 1.55;
+    pub const axis_head_end: f32 = 1.82;
+    pub const axis_shaft_radius: f32 = 0.03;
+    pub const axis_head_radius: f32 = 0.09;
+    pub const axis_sides: i32 = 12;
+};
+
 pub const theme = struct {
     pub const background = color(8, 10, 14, 255);
     pub const frame_panel = color(11, 14, 20, 255);
