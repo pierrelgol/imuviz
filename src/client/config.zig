@@ -57,11 +57,15 @@ pub const plot = struct {
     pub const grid_ratio: f32 = 0.004;
     pub const trace_ratio: f32 = 0.007;
     pub const cursor_line_ratio: f32 = 0.006;
-    pub const cursor_readout_offset_ratio: f32 = 0.020;
+    pub const cursor_readout_offset_ratio: f32 = 0.080;
     pub const cursor_readout_line_gap_ratio: f32 = 0.080;
     pub const cursor_readout_size_ratio: f32 = 0.038;
-    pub const cursor_column_right_gap_ratio: f32 = 0.012;
+    pub const cursor_column_width_ratio: f32 = 0.090;
+    pub const cursor_column_gap_ratio: f32 = 0.012;
+    pub const cursor_column_inner_padding_px: f32 = 4.0;
+    pub const y_tick_lane_width_ratio: f32 = 0.055;
     pub const cursor_column_fill = color(10, 13, 18, 210);
+    pub const show_delta_series: bool = true;
 };
 
 pub const window_initial_width: i32 = 1600;
@@ -103,6 +107,7 @@ pub const renderer = struct {
     pub const scene_ref_y = color(80, 214, 124, 255);
     pub const scene_ref_z = color(86, 166, 245, 255);
     pub const trace_gyro_norm = color(230, 126, 247, 255);
+    pub const delta_trace = color(230, 230, 230, 255);
 };
 
 pub const ui = struct {

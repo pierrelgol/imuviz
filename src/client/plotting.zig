@@ -5,6 +5,7 @@ const History = @import("history.zig").History;
 
 pub const SeriesDef = struct {
     history: *const History,
+    rhs_history: ?*const History = null,
     kind: History.TraceKind,
     label: []const u8,
     color: rl.Color,
@@ -76,7 +77,10 @@ pub const PlotStyle = struct {
         legend_item_gap_ratio: f32 = cfg.plot.legend_item_gap_ratio,
         cursor_readout_offset_ratio: f32 = cfg.plot.cursor_readout_offset_ratio,
         cursor_readout_line_gap_ratio: f32 = cfg.plot.cursor_readout_line_gap_ratio,
-        cursor_column_right_gap_ratio: f32 = cfg.plot.cursor_column_right_gap_ratio,
+        cursor_column_width_ratio: f32 = cfg.plot.cursor_column_width_ratio,
+        cursor_column_gap_ratio: f32 = cfg.plot.cursor_column_gap_ratio,
+        cursor_column_inner_padding_px: f32 = cfg.plot.cursor_column_inner_padding_px,
+        y_tick_lane_width_ratio: f32 = cfg.plot.y_tick_lane_width_ratio,
     };
 
     pub const Typography = struct {
@@ -156,14 +160,30 @@ fn drawFrame(rect: rl.Rectangle, style: PlotStyle) void {
 }
 
 fn computeChartRect(rect: rl.Rectangle, layout: PlotStyle.Layout) rl.Rectangle {
+    const cursor_column = computeCursorColumnRect(rect, layout);
     const left_pad = rect.width * layout.left_padding_ratio;
     const right_pad = rect.width * layout.right_padding_ratio;
     const top_pad = rect.height * layout.top_padding_ratio;
     const bottom_pad = rect.height * layout.bottom_padding_ratio;
+    const column_gap = rect.width * layout.cursor_column_gap_ratio;
+    const y_tick_lane = rect.width * layout.y_tick_lane_width_ratio;
+    return .{
+        .x = rect.x + left_pad + cursor_column.width + column_gap + y_tick_lane,
+        .y = rect.y + top_pad,
+        .width = @max(1.0, rect.width - left_pad - right_pad - cursor_column.width - column_gap - y_tick_lane),
+        .height = @max(1.0, rect.height - top_pad - bottom_pad),
+    };
+}
+
+fn computeCursorColumnRect(rect: rl.Rectangle, layout: PlotStyle.Layout) rl.Rectangle {
+    const left_pad = rect.width * layout.left_padding_ratio;
+    const top_pad = rect.height * layout.top_padding_ratio;
+    const bottom_pad = rect.height * layout.bottom_padding_ratio;
+    const w = @max(1.0, rect.width * layout.cursor_column_width_ratio);
     return .{
         .x = rect.x + left_pad,
         .y = rect.y + top_pad,
-        .width = @max(1.0, rect.width - left_pad - right_pad),
+        .width = w,
         .height = @max(1.0, rect.height - top_pad - bottom_pad),
     };
 }
@@ -185,10 +205,14 @@ fn absoluteLatest(series: []const SeriesDef) f64 {
     var latest: f64 = 0;
     var has_value = false;
     for (series) |s| {
-        const ts = s.history.latestTimestamp() orelse continue;
-        if (!has_value or ts > latest) {
-            latest = ts;
+        const lhs_ts = s.history.latestTimestamp() orelse continue;
+        if (!has_value or lhs_ts > latest) {
+            latest = lhs_ts;
             has_value = true;
+        }
+        if (s.rhs_history) |rhs| {
+            const rhs_ts = rhs.latestTimestamp() orelse continue;
+            if (rhs_ts > latest) latest = rhs_ts;
         }
     }
     return latest;
@@ -197,6 +221,15 @@ fn absoluteLatest(series: []const SeriesDef) f64 {
 fn countVisiblePoints(series: []const SeriesDef, x_domain: AxisDomain, relative: bool) usize {
     var count: usize = 0;
     for (series) |s| {
+        if (s.rhs_history) |_| {
+            for (0..s.history.len) |i| {
+                const x = sampleXAtIndex(s.history, i, relative) orelse continue;
+                if (x < x_domain.min or x > x_domain.max) continue;
+                if (seriesValueAtX(s, x, x_domain, relative) != null) count += 1;
+            }
+            continue;
+        }
+
         const latest_ts = s.history.latestTimestamp() orelse continue;
         for (0..s.history.len) |i| {
             const sample = s.history.sample(i);
@@ -212,6 +245,17 @@ fn computeYDomain(series: []const SeriesDef, x_domain: AxisDomain, relative: boo
     var max_v: f32 = -std.math.inf(f32);
 
     for (series) |s| {
+        if (s.rhs_history) |_| {
+            for (0..s.history.len) |i| {
+                const x = sampleXAtIndex(s.history, i, relative) orelse continue;
+                if (x < x_domain.min or x > x_domain.max) continue;
+                const v = seriesValueAtX(s, x, x_domain, relative) orelse continue;
+                min_v = @min(min_v, v);
+                max_v = @max(max_v, v);
+            }
+            continue;
+        }
+
         const latest_ts = s.history.latestTimestamp() orelse continue;
         for (0..s.history.len) |i| {
             const sample = s.history.sample(i);
@@ -274,7 +318,14 @@ fn drawAxisGraduations(axis: Axis, chart_rect: rl.Rectangle, domain: AxisDomain,
             .y => {
                 const y = chart_rect.y + chart_rect.height * (1.0 - t);
                 rl.drawLineEx(.{ .x = chart_rect.x - tick_len, .y = y }, .{ .x = chart_rect.x, .y = y }, lineThickness(min_dim, style.stroke.grid_ratio), style.palette.axis);
-                drawTickValue(value, axis_options.label_format, @intFromFloat(chart_rect.x - tick_len - 44), @intFromFloat(y - @as(f32, @floatFromInt(tick_font)) * 0.5), tick_font, style.palette.tick);
+                drawTickValueRightAligned(
+                    value,
+                    axis_options.label_format,
+                    @intFromFloat(chart_rect.x - tick_len - 4.0),
+                    @intFromFloat(y - @as(f32, @floatFromInt(tick_font)) * 0.5),
+                    tick_font,
+                    style.palette.tick,
+                );
             },
         }
     }
@@ -300,15 +351,12 @@ fn drawSeries(series: []const SeriesDef, chart_rect: rl.Rectangle, x_domain: Axi
 fn drawOneSeries(s: SeriesDef, chart_rect: rl.Rectangle, x_domain: AxisDomain, y_domain: AxisDomain, relative: bool, style: PlotStyle, min_dim: f32) void {
     var prev: ?rl.Vector2 = null;
     const thickness = lineThickness(min_dim, style.stroke.trace_ratio);
-    const latest_ts = s.history.latestTimestamp() orelse return;
-
     for (0..s.history.len) |i| {
-        const sample = s.history.sample(i);
-        const x_value = if (relative) sample.timestamp - latest_ts else sample.timestamp;
+        const x_value = sampleXAtIndex(s.history, i, relative) orelse continue;
         if (x_value < x_domain.min or x_value > x_domain.max) continue;
 
         const x_norm = @as(f32, @floatCast((x_value - x_domain.min) / (x_domain.max - x_domain.min)));
-        const value = s.history.value(i, s.kind);
+        const value = seriesValueAtX(s, x_value, x_domain, relative) orelse continue;
         const y_norm = @as(f32, @floatCast((@as(f64, value) - y_domain.min) / (y_domain.max - y_domain.min)));
         const point = rl.Vector2{
             .x = chart_rect.x + chart_rect.width * clamp01(x_norm),
@@ -354,21 +402,13 @@ fn drawCursorReadout(
     min_dim: f32,
 ) void {
     const font = fontSize(min_dim, style.typography.cursor_readout_size_ratio, style.typography.min_font_px);
-    const column_left = rect.x + rect.width * style.layout.cursor_readout_offset_ratio;
-    const column_right = chart_rect.x - rect.width * style.layout.cursor_column_right_gap_ratio;
-    if (column_right - column_left < 20.0) return;
-
-    const panel = rl.Rectangle{
-        .x = column_left,
-        .y = rect.y,
-        .width = @max(1.0, column_right - column_left),
-        .height = rect.height,
-    };
+    _ = chart_rect;
+    const panel = computeCursorColumnRect(rect, style.layout);
     rl.drawRectangleRec(panel, style.palette.cursor_panel_fill);
 
-    const origin_x: i32 = @intFromFloat(column_left + 4.0);
-    const origin_y: i32 = @intFromFloat(rect.y + rect.height * style.layout.cursor_readout_offset_ratio);
-    const line_gap: i32 = @max(1, @as(i32, @intFromFloat(rect.height * style.layout.cursor_readout_line_gap_ratio)));
+    const origin_x: i32 = @intFromFloat(panel.x + style.layout.cursor_column_inner_padding_px);
+    const origin_y: i32 = @intFromFloat(panel.y + panel.height * style.layout.cursor_readout_offset_ratio);
+    const line_gap: i32 = @max(1, @as(i32, @intFromFloat(panel.height * style.layout.cursor_readout_line_gap_ratio)));
 
     var time_buf: [64]u8 = undefined;
     const time_text = std.fmt.bufPrintZ(&time_buf, "t={d:.2}s", .{x_value}) catch return;
@@ -394,21 +434,39 @@ fn drawCursorReadout(
 }
 
 fn sampleAtCursor(s: SeriesDef, x_value: f64, x_domain: AxisDomain, relative: bool) ?f32 {
-    const latest_ts = s.history.latestTimestamp() orelse return null;
+    return seriesValueAtX(s, x_value, x_domain, relative);
+}
+
+fn sampleXAtIndex(history: *const History, logical_index: usize, relative: bool) ?f64 {
+    const sample = history.sample(logical_index);
+    if (!relative) return sample.timestamp;
+    const latest_ts = history.latestTimestamp() orelse return null;
+    return sample.timestamp - latest_ts;
+}
+
+fn valueNearestX(history: *const History, kind: History.TraceKind, x_value: f64, x_domain: AxisDomain, relative: bool) ?f32 {
     var best: ?f32 = null;
     var best_dist = std.math.inf(f64);
 
-    for (0..s.history.len) |i| {
-        const sample = s.history.sample(i);
-        const sx = if (relative) sample.timestamp - latest_ts else sample.timestamp;
+    for (0..history.len) |i| {
+        const sx = sampleXAtIndex(history, i, relative) orelse continue;
         if (sx < x_domain.min or sx > x_domain.max) continue;
         const dist = @abs(sx - x_value);
         if (dist < best_dist) {
             best_dist = dist;
-            best = s.history.value(i, s.kind);
+            best = history.value(i, kind);
         }
     }
     return best;
+}
+
+fn seriesValueAtX(s: SeriesDef, x_value: f64, x_domain: AxisDomain, relative: bool) ?f32 {
+    const lhs = valueNearestX(s.history, s.kind, x_value, x_domain, relative) orelse return null;
+    if (s.rhs_history) |rhs| {
+        const rhs_v = valueNearestX(rhs, s.kind, x_value, x_domain, relative) orelse return null;
+        return lhs - rhs_v;
+    }
+    return lhs;
 }
 
 fn drawLegend(rect: rl.Rectangle, series: []const SeriesDef, style: PlotStyle, min_dim: f32) void {
@@ -447,6 +505,17 @@ fn drawTickValue(value: f64, format: LabelFormat, x: i32, y: i32, font: i32, col
         .fixed2 => std.fmt.bufPrintZ(&buf, "{d:.2}", .{value}) catch return,
     };
     rl.drawText(text, x, y, font, color);
+}
+
+fn drawTickValueRightAligned(value: f64, format: LabelFormat, right_x: i32, y: i32, font: i32, color: rl.Color) void {
+    var buf: [64]u8 = undefined;
+    const text = switch (format) {
+        .fixed0 => std.fmt.bufPrintZ(&buf, "{d:.0}", .{value}) catch return,
+        .fixed1 => std.fmt.bufPrintZ(&buf, "{d:.1}", .{value}) catch return,
+        .fixed2 => std.fmt.bufPrintZ(&buf, "{d:.2}", .{value}) catch return,
+    };
+    const w = rl.measureText(text, font);
+    rl.drawText(text, right_x - w, y, font, color);
 }
 
 fn beginChartClip(chart_rect: rl.Rectangle) void {

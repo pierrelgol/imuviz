@@ -144,30 +144,43 @@ fn drawComparisonPlot(
 ) void {
     if (!isDrawableRect(rect)) return;
 
-    var series_buffer: [cfg.max_hosts]plotting.SeriesDef = undefined;
-    const n = @min(devices.len, series_buffer.len);
+    var series_buffer: [cfg.max_hosts + 1]plotting.SeriesDef = undefined;
+    const n = @min(devices.len, cfg.max_hosts);
+    var series_count: usize = 0;
     for (0..n) |i| {
         series_buffer[i] = .{
             .history = devices[i].history,
             .kind = kind,
-            .label = devices[i].title,
+            .label = deviceSeriesLabel(i),
             .color = shadeForDevice(base_color, i, n),
             .available = devices[i].snapshot.state == .connected,
         };
+        series_count += 1;
+    }
+    if (cfg.plot.show_delta_series and n >= 2) {
+        series_buffer[series_count] = .{
+            .history = devices[0].history,
+            .rhs_history = devices[1].history,
+            .kind = kind,
+            .label = "d",
+            .color = cfg.renderer.delta_trace,
+            .available = devices[0].snapshot.state == .connected and devices[1].snapshot.state == .connected,
+        };
+        series_count += 1;
     }
 
     plotting.drawPlot(
         rect,
         .{
             .title = title,
-            .series = series_buffer[0..n],
+            .series = series_buffer[0..series_count],
             .x_window_seconds = cfg.history_window_seconds,
             .x_axis = .{ .label = "time (s)", .graduation_count = cfg.plot.raw_x_graduations, .label_format = .fixed1 },
             .y_axis = .{ .label = "", .graduation_count = cfg.plot.raw_y_graduations, .label_format = y_format },
             .x_labels_relative_to_latest = true,
             .show_x_axis_label = false,
             .show_y_axis_label = false,
-            .show_legend = n > 1,
+            .show_legend = series_count > 1,
             .y_domain = y_domain,
             .cursor_x_norm = if (shared_cursor.active) shared_cursor.x_norm else null,
         },
@@ -207,4 +220,16 @@ fn statusMeta(state: net.ConnectionState) struct { text: []const u8, color: rl.C
 
 fn isDrawableRect(rect: rl.Rectangle) bool {
     return rect.width >= 1.0 and rect.height >= 1.0;
+}
+
+fn deviceSeriesLabel(index: usize) []const u8 {
+    return switch (index) {
+        0 => "1",
+        1 => "2",
+        2 => "3",
+        3 => "4",
+        4 => "5",
+        5 => "6",
+        else => "?",
+    };
 }
