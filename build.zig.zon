@@ -1,0 +1,13 @@
+.{
+    .name = .imu_dbg,
+    .version = "0.0.0",
+    .fingerprint = 0x5eb724a5d440be29, 
+    .minimum_zig_version = "0.16.0-dev.2510+bcb5218a2",
+    .dependencies = .{
+    },
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+    },
+}
