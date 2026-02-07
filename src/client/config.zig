@@ -181,6 +181,12 @@ pub const options_menu = struct {
     pub const item_size: i32 = 14;
 };
 
+pub const settings = struct {
+    pub const file_name: []const u8 = "settings.json";
+    pub const max_file_bytes: usize = 64 * 1024;
+    pub const autosave_interval_ms: i64 = 1000;
+};
+
 pub const scene3d = struct {
     pub const camera_pos: rl.Vector3 = .{ .x = 2.9, .y = 2.35, .z = 2.9 };
     pub const camera_target: rl.Vector3 = .{ .x = 0.0, .y = 0.55, .z = 0.0 };

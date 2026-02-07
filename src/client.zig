@@ -7,6 +7,7 @@ const History = @import("client/history.zig").History;
 const Renderer = @import("client/renderer.zig").Renderer;
 const DeviceFrame = @import("client/renderer.zig").DeviceFrame;
 const options_mod = @import("client/options.zig");
+const settings_mod = @import("client/settings.zig");
 const utils = @import("client/utils.zig");
 
 comptime {
@@ -15,6 +16,7 @@ comptime {
     std.testing.refAllDecls(History);
     std.testing.refAllDecls(DeviceFrame);
     std.testing.refAllDecls(options_mod);
+    std.testing.refAllDecls(settings_mod);
     std.testing.refAllDecls(utils);
 }
 
@@ -132,6 +134,28 @@ pub fn main(init: std.process.Init) !void {
 
     var histories: [cfg.max_hosts]History = [_]History{.{}} ** cfg.max_hosts;
     var runtime_options: options_mod.RuntimeOptions = .{};
+    var settings_store: ?settings_mod.Store = settings_mod.Store.init(io, arena) catch |err| blk: {
+        std.log.warn("settings: init disabled: {}", .{err});
+        break :blk null;
+    };
+    defer if (settings_store) |*store| {
+        store.save(runtime_options) catch |err| {
+            std.log.warn("settings: failed to save on exit: {}", .{err});
+        };
+        store.deinit();
+    };
+    if (settings_store) |*store| {
+        const loaded = store.load(&runtime_options) catch |err| blk: {
+            std.log.warn("settings: load failed: {}", .{err});
+            break :blk false;
+        };
+        if (loaded) {
+            std.log.info("settings: loaded {s}", .{cfg.settings.file_name});
+        }
+    }
+    var last_saved_options = settings_mod.normalize(runtime_options);
+    var last_settings_save_ms: i64 = 0;
+    var settings_save_pending = false;
     var options_menu: options_mod.Menu = .{};
     var renderer: Renderer = .{
         .root_layout_options = .{
@@ -166,6 +190,10 @@ pub fn main(init: std.process.Init) !void {
     while (!rl.windowShouldClose() and !should_stop.load(.acquire)) {
         frame_count += 1;
         options_menu.update(&runtime_options);
+        const normalized_options = settings_mod.normalize(runtime_options);
+        if (!std.meta.eql(normalized_options, last_saved_options)) {
+            settings_save_pending = true;
+        }
         for (0..args.hosts.count) |i| {
             const drained = client_network.drain(i, &drain_buffer);
             for (drain_buffer[0..drained]) |report| {
@@ -177,6 +205,17 @@ pub fn main(init: std.process.Init) !void {
         }
 
         const now_ms: i64 = @intFromFloat(rl.getTime() * 1000.0);
+        if (settings_store) |*store| {
+            if (settings_save_pending and (now_ms - last_settings_save_ms) >= cfg.settings.autosave_interval_ms) {
+                if (store.save(runtime_options)) |_| {
+                    last_saved_options = normalized_options;
+                    settings_save_pending = false;
+                } else |err| {
+                    std.log.warn("settings: autosave failed: {}", .{err});
+                }
+                last_settings_save_ms = now_ms;
+            }
+        }
         if (now_ms - last_render_debug_ms >= cfg.render_debug_interval_ms) {
             last_render_debug_ms = now_ms;
             for (0..args.hosts.count) |i| {
