@@ -4,6 +4,7 @@ const cfg = @import("config.zig");
 const ui = @import("ui.zig");
 const net = @import("network.zig");
 const plotting = @import("plotting.zig");
+const scene3d = @import("scene3d.zig");
 const History = @import("history.zig").History;
 const drawTextFmt = @import("utils.zig").drawTextFmt;
 
@@ -13,56 +14,8 @@ pub const DeviceFrame = struct {
     snapshot: net.EndpointSnapshot,
 };
 
-const SceneTarget = struct {
-    rt: ?rl.RenderTexture2D = null,
-    width: i32 = 0,
-    height: i32 = 0,
-    warned_invalid_rt: bool = false,
-
-    fn ensure(self: *SceneTarget, width: i32, height: i32) void {
-        if (width < cfg.renderer.min_scene_dim_px or height < cfg.renderer.min_scene_dim_px) return;
-        if (self.rt != null and self.width == width and self.height == height) return;
-
-        if (self.rt) |texture| {
-            rl.unloadRenderTexture(texture);
-            self.rt = null;
-        }
-
-        const loaded = rl.loadRenderTexture(width, height) catch |err| {
-            std.log.err("client: failed to allocate render texture {}x{}: {}", .{ width, height, err });
-            self.rt = null;
-            self.width = width;
-            self.height = height;
-            return;
-        };
-        self.rt = loaded;
-
-        if (self.rt) |rt| {
-            if (!rl.isRenderTextureValid(rt)) {
-                if (!self.warned_invalid_rt) {
-                    self.warned_invalid_rt = true;
-                    std.log.err("client: invalid render texture {}x{} (id={})", .{ width, height, rt.id });
-                }
-                rl.unloadRenderTexture(rt);
-                self.rt = null;
-            } else if (self.warned_invalid_rt) {
-                self.warned_invalid_rt = false;
-                std.log.info("client: render texture valid again {}x{} (id={})", .{ width, height, rt.id });
-            }
-        }
-
-        self.width = width;
-        self.height = height;
-    }
-
-    fn deinit(self: *SceneTarget) void {
-        if (self.rt) |texture| rl.unloadRenderTexture(texture);
-        self.* = .{};
-    }
-};
-
 pub const Renderer = struct {
-    scenes: [cfg.max_hosts]SceneTarget = [_]SceneTarget{.{}} ** cfg.max_hosts,
+    scenes: [cfg.max_hosts]scene3d.SceneTarget = [_]scene3d.SceneTarget{.{}} ** cfg.max_hosts,
     root_layout_options: ui.RootLayoutOptions = .{},
     panel_layout_options: ui.PanelLayoutOptions = .{},
 
@@ -101,7 +54,7 @@ fn drawTitleBar(title_rect: rl.Rectangle, device_count: usize) void {
 }
 
 fn drawDevicePanel(
-    scene_target: *SceneTarget,
+    scene_target: *scene3d.SceneTarget,
     panel: rl.Rectangle,
     scale: ui.UiScale,
     panel_layout_options: ui.PanelLayoutOptions,
@@ -113,7 +66,7 @@ fn drawDevicePanel(
     drawPanelHeader(panel, scale, device);
 
     const content = ui.splitDevicePanel(panel, scale, panel_layout_options);
-    drawScenePanel(scene_target, content.scene, device.history);
+    scene3d.draw(scene_target, content.scene, device.history);
     drawSignalPlots(content, device.history);
     drawCurrentValues(panel, device.history);
 }
@@ -190,121 +143,16 @@ fn drawSignalPlot(
 }
 
 fn drawCurrentValues(panel: rl.Rectangle, history: *const History) void {
-    if (history.len == 0) return;
-
-    const i = history.index(history.len - 1);
+    const sample = history.latestSample() orelse return;
     const y = panel.y + panel.height - cfg.renderer.current_values_bottom_offset;
     drawTextFmt(
         "A:[{d:.0},{d:.0},{d:.0}] Gnorm:{d:.1} E:{d:.1} B:{d:.1}",
-        .{ history.accel_x[i], history.accel_y[i], history.accel_z[i], history.gyro_norm[i], history.elevation[i], history.bearing[i] },
+        .{ sample.accel_x, sample.accel_y, sample.accel_z, sample.gyro_norm, sample.elevation, sample.bearing },
         @intFromFloat(panel.x + cfg.renderer.current_values_x_offset),
         @intFromFloat(y),
         cfg.renderer.current_values_size,
         cfg.theme.text_secondary,
     );
-}
-
-fn drawScenePanel(target: *SceneTarget, rect: rl.Rectangle, history: *const History) void {
-    if (!isDrawableRect(rect)) return;
-
-    const width: i32 = @intFromFloat(@max(rect.width, 1));
-    const height: i32 = @intFromFloat(@max(rect.height, 1));
-    target.ensure(width, height);
-
-    const rt = target.rt orelse {
-        drawSceneUnavailable(rect);
-        return;
-    };
-
-    rl.beginTextureMode(rt);
-    rl.clearBackground(cfg.renderer.scene_bg);
-
-    const camera = rl.Camera3D{
-        .position = cfg.scene3d.camera_pos,
-        .target = cfg.scene3d.camera_target,
-        .up = cfg.scene3d.camera_up,
-        .fovy = cfg.scene3d.camera_fovy,
-        .projection = .perspective,
-    };
-
-    rl.beginMode3D(camera);
-    rl.drawGrid(cfg.scene3d.grid_slices, cfg.scene3d.grid_spacing);
-    rl.drawSphere(cfg.scene3d.sphere_center, cfg.scene3d.sphere_radius, cfg.renderer.scene_sphere_fill);
-    rl.drawSphereWires(cfg.scene3d.sphere_center, cfg.scene3d.sphere_radius, 16, 16, cfg.renderer.scene_sphere_wire);
-
-    const orientation = latestOrientation(history);
-    drawAxisArrow(orientation.elevation, orientation.bearing, .{ .x = 1, .y = 0, .z = 0 }, rl.Color.red);
-    drawAxisArrow(orientation.elevation, orientation.bearing, .{ .x = 0, .y = 1, .z = 0 }, rl.Color.green);
-    drawAxisArrow(orientation.elevation, orientation.bearing, .{ .x = 0, .y = 0, .z = 1 }, rl.Color.blue);
-    rl.endMode3D();
-    rl.endTextureMode();
-
-    const src = rl.Rectangle{
-        .x = 0,
-        .y = 0,
-        .width = @floatFromInt(rt.texture.width),
-        .height = -@as(f32, @floatFromInt(rt.texture.height)),
-    };
-    rl.drawTexturePro(rt.texture, src, rect, .{ .x = 0, .y = 0 }, 0, rl.Color.white);
-    rl.drawRectangleLinesEx(rect, cfg.renderer.panel_border_thickness, cfg.theme.border);
-}
-
-fn drawSceneUnavailable(rect: rl.Rectangle) void {
-    rl.drawRectangleRec(rect, cfg.renderer.scene_unavailable_fill);
-    rl.drawRectangleLinesEx(rect, cfg.renderer.panel_border_thickness, cfg.renderer.scene_unavailable_border);
-    drawTextFmt(
-        "3D unavailable (invalid render target)",
-        .{},
-        @intFromFloat(rect.x + cfg.renderer.invalid_rt_text_x_offset),
-        @intFromFloat(rect.y + cfg.renderer.invalid_rt_text_y_offset),
-        cfg.renderer.invalid_rt_text_size,
-        cfg.renderer.scene_unavailable_text,
-    );
-}
-
-fn latestOrientation(history: *const History) struct { elevation: f32, bearing: f32 } {
-    if (history.len == 0) return .{ .elevation = 0, .bearing = 0 };
-    const i = history.index(history.len - 1);
-    return .{ .elevation = history.elevation[i], .bearing = history.bearing[i] };
-}
-
-fn drawAxisArrow(elevation_deg: f32, bearing_deg: f32, axis: rl.Vector3, color: rl.Color) void {
-    const dir = rotateAxis(axis, elevation_deg, bearing_deg);
-    const origin = cfg.scene3d.origin;
-
-    const shaft_start = origin.add(dir.scale(cfg.scene3d.axis_shaft_start));
-    const shaft_end = origin.add(dir.scale(cfg.scene3d.axis_shaft_end));
-    rl.drawCylinderEx(shaft_start, shaft_end, cfg.scene3d.axis_shaft_radius, cfg.scene3d.axis_shaft_radius, cfg.scene3d.axis_sides, color);
-
-    const head_start = origin.add(dir.scale(cfg.scene3d.axis_head_start));
-    const head_end = origin.add(dir.scale(cfg.scene3d.axis_head_end));
-    rl.drawCylinderEx(head_start, head_end, cfg.scene3d.axis_head_radius, 0.0, cfg.scene3d.axis_sides, color);
-}
-
-fn rotateAxis(axis: rl.Vector3, elevation_deg: f32, bearing_deg: f32) rl.Vector3 {
-    const deg_to_rad = std.math.pi / 180.0;
-    const elev = elevation_deg * deg_to_rad;
-    const bear = bearing_deg * deg_to_rad;
-
-    var v = rl.Vector3{ .x = -axis.x, .y = axis.y, .z = -axis.z };
-
-    const cos_b = @cos(bear);
-    const sin_b = @sin(bear);
-    v = .{
-        .x = cos_b * v.x - sin_b * v.y,
-        .y = sin_b * v.x + cos_b * v.y,
-        .z = v.z,
-    };
-
-    const cos_e = @cos(elev);
-    const sin_e = @sin(elev);
-    v = .{
-        .x = cos_e * v.x + sin_e * v.z,
-        .y = v.y,
-        .z = -sin_e * v.x + cos_e * v.z,
-    };
-
-    return v;
 }
 
 fn statusMeta(state: net.ConnectionState) struct { text: []const u8, color: rl.Color } {

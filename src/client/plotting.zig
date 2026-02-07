@@ -106,8 +106,14 @@ pub fn drawPlot(rect: rl.Rectangle, history: *const History, options: PlotOption
     };
 
     const x_domain: AxisDomain = .{ .min = latest_t - options.x_window_seconds, .max = latest_t };
+    const range = history.rangeByTimestamp(x_domain.min, x_domain.max);
+    if (range.isEmpty()) {
+        drawEmptyState(chart_rect, options.empty_message, style, min_dim);
+        return;
+    }
+
     const y_domain = switch (options.y_domain) {
-        .dynamic => computeYDomain(history, options.traces, x_domain, cfg.plot.y_padding_fraction) orelse {
+        .dynamic => computeYDomain(history, range, options.traces, cfg.plot.y_padding_fraction) orelse {
             drawEmptyState(chart_rect, options.empty_message, style, min_dim);
             return;
         },
@@ -119,7 +125,7 @@ pub fn drawPlot(rect: rl.Rectangle, history: *const History, options: PlotOption
     drawAxisGraduations(.y, chart_rect, y_domain, options.y_axis, style, min_dim, null);
     drawAxisLabels(rect, chart_rect, options, style, min_dim);
 
-    drawTraces(history, options.traces, chart_rect, x_domain, y_domain, style, min_dim);
+    drawTraces(history, range, options.traces, chart_rect, x_domain, y_domain, style, min_dim);
 
     if (options.show_legend) {
         drawLegend(rect, options.traces, style, min_dim);
@@ -195,15 +201,11 @@ fn drawEmptyState(chart_rect: rl.Rectangle, text: []const u8, style: PlotStyle, 
     drawTextSlice(text, @intFromFloat(chart_rect.x + chart_rect.width * 0.03), @intFromFloat(chart_rect.y + chart_rect.height * 0.5), font, style.palette.empty_text);
 }
 
-fn computeYDomain(history: *const History, traces: []const TraceDef, x_domain: AxisDomain, y_padding_fraction: f32) ?AxisDomain {
+fn computeYDomain(history: *const History, range: History.LogicalRange, traces: []const TraceDef, y_padding_fraction: f32) ?AxisDomain {
     var min_v: f32 = std.math.inf(f32);
     var max_v: f32 = -std.math.inf(f32);
 
-    for (0..history.len) |logical_index| {
-        const idx = history.index(logical_index);
-        const ts = history.timestamp[idx];
-        if (ts < x_domain.min or ts > x_domain.max) continue;
-
+    for (range.start..range.end) |logical_index| {
         for (traces) |trace| {
             const v = history.value(logical_index, trace.kind);
             min_v = @min(min_v, v);
@@ -264,25 +266,23 @@ fn drawAxisLabels(rect: rl.Rectangle, chart_rect: rl.Rectangle, options: PlotOpt
     }
 }
 
-fn drawTraces(history: *const History, traces: []const TraceDef, chart_rect: rl.Rectangle, x_domain: AxisDomain, y_domain: AxisDomain, style: PlotStyle, min_dim: f32) void {
+fn drawTraces(history: *const History, range: History.LogicalRange, traces: []const TraceDef, chart_rect: rl.Rectangle, x_domain: AxisDomain, y_domain: AxisDomain, style: PlotStyle, min_dim: f32) void {
     beginChartClip(chart_rect);
     defer rl.endScissorMode();
 
     for (traces) |trace| {
-        drawTrace(history, trace, chart_rect, x_domain, y_domain, style, min_dim);
+        drawTrace(history, range, trace, chart_rect, x_domain, y_domain, style, min_dim);
     }
 }
 
-fn drawTrace(history: *const History, trace: TraceDef, chart_rect: rl.Rectangle, x_domain: AxisDomain, y_domain: AxisDomain, style: PlotStyle, min_dim: f32) void {
+fn drawTrace(history: *const History, range: History.LogicalRange, trace: TraceDef, chart_rect: rl.Rectangle, x_domain: AxisDomain, y_domain: AxisDomain, style: PlotStyle, min_dim: f32) void {
     var prev: ?rl.Vector2 = null;
     const thickness = lineThickness(min_dim, style.stroke.trace_ratio);
 
-    for (0..history.len) |logical_index| {
-        const idx = history.index(logical_index);
-        const ts = history.timestamp[idx];
-        if (ts < x_domain.min or ts > x_domain.max) continue;
+    for (range.start..range.end) |logical_index| {
+        const s = history.sample(logical_index);
 
-        const x_norm = @as(f32, @floatCast((ts - x_domain.min) / (x_domain.max - x_domain.min)));
+        const x_norm = @as(f32, @floatCast((s.timestamp - x_domain.min) / (x_domain.max - x_domain.min)));
         const value = history.value(logical_index, trace.kind);
         const y_norm = @as(f32, @floatCast((@as(f64, value) - y_domain.min) / (y_domain.max - y_domain.min)));
 
