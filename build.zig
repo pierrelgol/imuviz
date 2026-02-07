@@ -46,7 +46,7 @@ pub fn build(b: *std.Build) void {
     const client_mod = b.createModule(.{
         .root_source_file = b.path("src/client.zig"),
         .target = target,
-        .optimize = .ReleaseSafe,
+        .optimize = optimize,
         .imports = &.{
             .{ .name = "common", .module = common_mod },
             .{ .name = "raylib", .module = raylib },
