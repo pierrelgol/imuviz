@@ -1,10 +1,15 @@
 .{
     .name = .imu_dbg,
     .version = "0.0.0",
-    .fingerprint = 0x5eb724a5d440be29, 
-    .minimum_zig_version = "0.16.0-dev.2510+bcb5218a2",
     .dependencies = .{
+        .raylib_zig = .{
+            .url = "git+https://github.com/pierrelgol/raylib-zig?ref=devel#b4f8ea4e4e34c4f5949509e101aaa6a07d00ffc2",
+            .hash = "raylib_zig-5.6.0-dev-KE8REDbkrAUyjLRYQd3DqXT0aOp2b-Pgv2BqTxmgbIta",
+        },
     },
+    .fingerprint = 0x5eb724a5d440be29,
+    .minimum_zig_version = "0.16.0-dev.2510+bcb5218a2",
+
     .paths = .{
         "build.zig",
         "build.zig.zon",

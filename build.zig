@@ -3,6 +3,20 @@ const std = @import("std");
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
+    const pi_target = b.resolveTargetQuery(.{
+        .cpu_arch = .arm,
+        .os_tag = .linux,
+        .abi = .gnueabihf,
+    });
+
+    const raylib_dep = b.dependency("raylib_zig", .{
+        .target = target,
+        .optimize = optimize,
+    });
+
+    const raylib = raylib_dep.module("raylib"); // main raylib module
+    const raygui = raylib_dep.module("raygui"); // raygui module
+    const raylib_artifact = raylib_dep.artifact("raylib"); // raylib C library
 
     const common_mod = b.createModule(.{
         .root_source_file = b.path("src/common.zig"),
@@ -32,11 +46,14 @@ pub fn build(b: *std.Build) void {
     const client_mod = b.createModule(.{
         .root_source_file = b.path("src/client.zig"),
         .target = target,
-        .optimize = optimize,
+        .optimize = .ReleaseSafe,
         .imports = &.{
             .{ .name = "common", .module = common_mod },
+            .{ .name = "raylib", .module = raylib },
+            .{ .name = "raygui", .module = raygui },
         },
     });
+    client_mod.linkLibrary(raylib_artifact);
 
     const generator = b.addExecutable(.{
         .name = "generator",
@@ -56,6 +73,24 @@ pub fn build(b: *std.Build) void {
     });
     b.installArtifact(host);
 
+    const host_pi_mod = b.createModule(.{
+        .root_source_file = b.path("src/host.zig"),
+        .target = pi_target,
+        .optimize = .ReleaseSafe,
+        .imports = &.{
+            .{ .name = "common", .module = common_mod },
+        },
+    });
+
+    const host_pi = b.addExecutable(.{
+        .name = "host-rpi",
+        .root_module = host_pi_mod,
+    });
+    const install_host_pi = b.addInstallArtifact(host_pi, .{});
+
+    const host_pi_step = b.step("host_pi", "Build host for Raspberry Pi armv7 Linux (gnueabihf)");
+    host_pi_step.dependOn(&install_host_pi.step);
+
     const run_host_step = b.step("run_host", "Run the app");
 
     const run_host_cmd = b.addRunArtifact(host);
@@ -69,7 +104,7 @@ pub fn build(b: *std.Build) void {
 
     const run_client_step = b.step("run_client", "Run the app");
 
-    const run_client_cmd = b.addRunArtifact(host);
+    const run_client_cmd = b.addRunArtifact(client);
     run_client_step.dependOn(&run_client_cmd.step);
 
     run_client_cmd.step.dependOn(b.getInstallStep());
@@ -80,7 +115,7 @@ pub fn build(b: *std.Build) void {
 
     const run_generator_step = b.step("run_generator", "Run the app");
 
-    const run_generator_cmd = b.addRunArtifact(host);
+    const run_generator_cmd = b.addRunArtifact(generator);
     run_generator_step.dependOn(&run_generator_cmd.step);
 
     run_generator_cmd.step.dependOn(b.getInstallStep());
