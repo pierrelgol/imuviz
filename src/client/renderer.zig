@@ -1,3 +1,4 @@
+const std = @import("std");
 const rl = @import("raylib");
 const cfg = @import("config.zig");
 const ui = @import("ui.zig");
@@ -52,6 +53,17 @@ fn drawTitleBar(title_rect: rl.Rectangle, device_count: usize) void {
         cfg.renderer.panel_title_size,
         cfg.theme.text_primary,
     );
+    drawFpsTopRight(title_rect);
+}
+
+fn drawFpsTopRight(title_rect: rl.Rectangle) void {
+    var fps_buf: [32]u8 = undefined;
+    const fps_text = std.fmt.bufPrintZ(&fps_buf, "FPS: {d}", .{rl.getFPS()}) catch return;
+    const font_size = cfg.renderer.status_text_size;
+    const text_w = rl.measureText(fps_text, font_size);
+    const x: i32 = @intFromFloat(title_rect.x + title_rect.width - @as(f32, @floatFromInt(text_w)) - cfg.renderer.fps_right_padding);
+    const y: i32 = @intFromFloat(title_rect.y + cfg.renderer.fps_top_padding);
+    rl.drawText(fps_text, x, y, font_size, cfg.theme.text_secondary);
 }
 
 fn drawSceneCard(target: *scene3d.SceneTarget, rect: rl.Rectangle, scale: ui.UiScale, device: DeviceFrame) void {

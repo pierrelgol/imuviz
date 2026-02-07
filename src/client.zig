@@ -144,15 +144,12 @@ pub fn main(init: std.process.Init) !void {
                 .panel_padding_min = cfg.ui.panel_padding_min,
             },
         },
-        .panel_layout_options = .{
-            .scene_ratio_wide = cfg.ui.scene_ratio_wide,
-            .scene_ratio_narrow = cfg.ui.scene_ratio_narrow,
-            .scene_ratio_breakpoint_px = cfg.ui.scene_ratio_breakpoint_px,
-            .scene_width_padding_scale = cfg.ui.scene_width_padding_scale,
-            .charts_gap_scale = cfg.ui.charts_gap_scale,
-            .chart_grid = .{
-                .two_column_width_height_ratio = cfg.ui.charts_two_column_width_height_ratio,
-            },
+        .comparison_layout_options = .{
+            .scenes_height_ratio_single = cfg.ui.comparison_scenes_height_ratio_single,
+            .scenes_height_ratio_multi = cfg.ui.comparison_scenes_height_ratio_multi,
+            .scene_gap_scale = cfg.ui.comparison_scene_gap_scale,
+            .plot_gap_scale = cfg.ui.comparison_plot_gap_scale,
+            .plot_columns = cfg.ui.comparison_plot_columns,
         },
     };
     defer renderer.deinit();
@@ -204,7 +201,6 @@ pub fn main(init: std.process.Init) !void {
         defer rl.endDrawing();
 
         renderer.draw(frames[0..args.hosts.count]);
-        rl.drawFPS(cfg.renderer.fps_x, cfg.renderer.fps_y);
     }
 }
 
