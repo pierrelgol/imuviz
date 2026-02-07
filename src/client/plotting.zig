@@ -9,6 +9,7 @@ pub const SeriesDef = struct {
     kind: History.TraceKind,
     label: []const u8,
     color: rl.Color,
+    render_enabled: bool = true,
     available: bool = true,
 };
 
@@ -39,6 +40,7 @@ pub const PlotOptions = struct {
     y_domain: YDomain = .dynamic,
     cursor_x_norm: ?f32 = null,
     show_stats_panel: bool = cfg.plot.show_stats_panel,
+    show_tolerance: bool = cfg.plot.show_tolerance_overlay,
     stats_key: ?usize = null,
     tolerance: ?ToleranceOptions = null,
 };
@@ -158,7 +160,7 @@ pub fn drawPlot(rect: rl.Rectangle, options: PlotOptions, style: PlotStyle) void
         options.cursor_x_norm,
         options.show_stats_panel,
         options.stats_key,
-        tolerance_state,
+        if (options.show_tolerance) tolerance_state else null,
         style,
         min_dim,
     );
@@ -178,7 +180,7 @@ pub fn drawPlot(rect: rl.Rectangle, options: PlotOptions, style: PlotStyle) void
     }
 
     drawGrid(chart_rect, options.x_axis.graduation_count, options.y_axis.graduation_count, style, min_dim);
-    if (cfg.plot.show_tolerance_overlay) {
+    if (options.show_tolerance) {
         if (options.tolerance) |tol| drawToleranceOverlay(chart_rect, y_domain, tol, tolerance_state orelse .na, style, min_dim);
     }
     drawAxisGraduations(.x, chart_rect, x_domain, options.x_axis, style, min_dim);
@@ -393,7 +395,10 @@ fn drawSeries(series: []const SeriesDef, chart_rect: rl.Rectangle, x_domain: Axi
     beginChartClip(chart_rect);
     defer rl.endScissorMode();
 
-    for (series) |s| drawOneSeries(s, chart_rect, x_domain, y_domain, relative, style, min_dim);
+    for (series) |s| {
+        if (!s.render_enabled) continue;
+        drawOneSeries(s, chart_rect, x_domain, y_domain, relative, style, min_dim);
+    }
 }
 
 fn drawOneSeries(s: SeriesDef, chart_rect: rl.Rectangle, x_domain: AxisDomain, y_domain: AxisDomain, relative: bool, style: PlotStyle, min_dim: f32) void {
@@ -474,6 +479,7 @@ fn drawSidePanel(
         y += line_gap;
 
         for (series) |s| {
+            if (!s.render_enabled) continue;
             var line_buf: [128]u8 = undefined;
             const clear_name = clearSeriesName(s.label);
             if (!s.available) {
@@ -542,6 +548,7 @@ fn drawStatsPanel(
     const snapshot = getStatsSnapshot(series, x_domain, relative, stats_key);
     var y = start_y;
     for (series, 0..) |s, i| {
+        if (!s.render_enabled) continue;
         var line1_buf: [160]u8 = undefined;
         var line2_buf: [160]u8 = undefined;
         const clear_name = clearSeriesName(s.label);
@@ -819,7 +826,11 @@ fn seriesValueAtX(s: SeriesDef, x_value: f64, x_domain: AxisDomain, relative: bo
 }
 
 fn drawLegend(rect: rl.Rectangle, series: []const SeriesDef, style: PlotStyle, min_dim: f32) void {
-    if (series.len == 0) return;
+    var visible_count: usize = 0;
+    for (series) |s| {
+        if (s.render_enabled) visible_count += 1;
+    }
+    if (visible_count == 0) return;
 
     const font = fontSize(min_dim, style.typography.legend_size_ratio, style.typography.min_font_px);
     const title_font = fontSize(min_dim, style.typography.title_size_ratio, style.typography.min_font_px);
@@ -830,9 +841,12 @@ fn drawLegend(rect: rl.Rectangle, series: []const SeriesDef, style: PlotStyle, m
         @as(f32, @floatFromInt(title_font));
 
     var total_w: f32 = 0.0;
-    for (series, 0..) |s, i| {
+    var seen: usize = 0;
+    for (series) |s| {
+        if (!s.render_enabled) continue;
         total_w += @as(f32, @floatFromInt(swatch + 4 + measureTextSlice(s.label, font)));
-        if (i + 1 < series.len) total_w += gap;
+        seen += 1;
+        if (seen < visible_count) total_w += gap;
     }
 
     const right_pad = rect.width * style.layout.right_padding_ratio;
@@ -840,6 +854,7 @@ fn drawLegend(rect: rl.Rectangle, series: []const SeriesDef, style: PlotStyle, m
     if (x < rect.x) x = rect.x;
 
     for (series) |s| {
+        if (!s.render_enabled) continue;
         rl.drawRectangle(@intFromFloat(x), @intFromFloat(y - @as(f32, @floatFromInt(swatch))), swatch, swatch, s.color);
         drawTextSlice(s.label, @intFromFloat(x + @as(f32, @floatFromInt(swatch + 4))), @intFromFloat(y - @as(f32, @floatFromInt(swatch + 2))), font, style.palette.legend_text);
         x += @as(f32, @floatFromInt(swatch)) + 6 + @as(f32, @floatFromInt(measureTextSlice(s.label, font))) + gap;

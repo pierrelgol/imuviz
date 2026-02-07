@@ -6,6 +6,7 @@ const net = @import("network.zig");
 const plotting = @import("plotting.zig");
 const scene3d = @import("scene3d.zig");
 const cursor = @import("cursor.zig");
+const options_mod = @import("options.zig");
 const History = @import("history.zig").History;
 const drawTextFmt = @import("utils.zig").drawTextFmt;
 
@@ -25,7 +26,7 @@ pub const Renderer = struct {
         for (&self.scenes) |*scene| scene.deinit();
     }
 
-    pub fn draw(self: *Renderer, devices: []const DeviceFrame) void {
+    pub fn draw(self: *Renderer, devices: []const DeviceFrame, options: options_mod.RuntimeOptions) void {
         const screen_w = rl.getScreenWidth();
         const screen_h = rl.getScreenHeight();
         const draw_count = @min(devices.len, self.scenes.len);
@@ -41,7 +42,7 @@ pub const Renderer = struct {
         }
 
         self.shared_cursor.update(cmp.plots);
-        drawSharedPlots(cmp.plots, devices[0..draw_count], self.shared_cursor);
+        drawSharedPlots(cmp.plots, devices[0..draw_count], self.shared_cursor, options);
     }
 };
 
@@ -123,13 +124,13 @@ fn drawCurrentValues(card_rect: rl.Rectangle, history: *const History) void {
     );
 }
 
-fn drawSharedPlots(plot_rects: [cfg.ui.chart_count]rl.Rectangle, devices: []const DeviceFrame, shared_cursor: cursor.SharedCursor) void {
-    drawComparisonPlot(plot_rects[0], 0, devices, .accel_x, "accel_x", .{ .fixed = .{ .min = cfg.plot.accel_min, .max = cfg.plot.accel_max } }, .fixed0, rl.Color.red, shared_cursor, .{ .warn_abs = cfg.plot.tolerance_accel_warn_abs, .fail_abs = cfg.plot.tolerance_accel_fail_abs, .basis = toleranceBasisFromConfig() });
-    drawComparisonPlot(plot_rects[1], 1, devices, .accel_y, "accel_y", .{ .fixed = .{ .min = cfg.plot.accel_min, .max = cfg.plot.accel_max } }, .fixed0, rl.Color.green, shared_cursor, .{ .warn_abs = cfg.plot.tolerance_accel_warn_abs, .fail_abs = cfg.plot.tolerance_accel_fail_abs, .basis = toleranceBasisFromConfig() });
-    drawComparisonPlot(plot_rects[2], 2, devices, .accel_z, "accel_z", .{ .fixed = .{ .min = cfg.plot.accel_min, .max = cfg.plot.accel_max } }, .fixed0, rl.Color.blue, shared_cursor, .{ .warn_abs = cfg.plot.tolerance_accel_warn_abs, .fail_abs = cfg.plot.tolerance_accel_fail_abs, .basis = toleranceBasisFromConfig() });
-    drawComparisonPlot(plot_rects[3], 3, devices, .gyro_norm, "gyro_norm", .{ .fixed = .{ .min = cfg.plot.gyro_norm_min, .max = cfg.plot.gyro_norm_max } }, .fixed0, cfg.renderer.trace_gyro_norm, shared_cursor, .{ .warn_abs = cfg.plot.tolerance_gyro_warn_abs, .fail_abs = cfg.plot.tolerance_gyro_fail_abs, .basis = toleranceBasisFromConfig() });
-    drawComparisonPlot(plot_rects[4], 4, devices, .elevation, "elevation", .{ .fixed = .{ .min = cfg.plot.elevation_min_deg, .max = cfg.plot.elevation_max_deg } }, .fixed0, rl.Color.orange, shared_cursor, .{ .warn_abs = cfg.plot.tolerance_elevation_warn_abs, .fail_abs = cfg.plot.tolerance_elevation_fail_abs, .basis = toleranceBasisFromConfig() });
-    drawComparisonPlot(plot_rects[5], 5, devices, .bearing, "bearing", .{ .fixed = .{ .min = cfg.plot.orientation_min_deg, .max = cfg.plot.orientation_max_deg } }, .fixed0, rl.Color.sky_blue, shared_cursor, .{ .warn_abs = cfg.plot.tolerance_bearing_warn_abs, .fail_abs = cfg.plot.tolerance_bearing_fail_abs, .basis = toleranceBasisFromConfig() });
+fn drawSharedPlots(plot_rects: [cfg.ui.chart_count]rl.Rectangle, devices: []const DeviceFrame, shared_cursor: cursor.SharedCursor, options: options_mod.RuntimeOptions) void {
+    drawComparisonPlot(plot_rects[0], 0, devices, .accel_x, "accel_x", .{ .fixed = .{ .min = cfg.plot.accel_min, .max = cfg.plot.accel_max } }, .fixed0, rl.Color.red, shared_cursor, options, .{ .warn_abs = options.tolerance_accel_warn_abs, .fail_abs = options.tolerance_accel_fail_abs, .basis = toleranceBasisFromOptions(options) });
+    drawComparisonPlot(plot_rects[1], 1, devices, .accel_y, "accel_y", .{ .fixed = .{ .min = cfg.plot.accel_min, .max = cfg.plot.accel_max } }, .fixed0, rl.Color.green, shared_cursor, options, .{ .warn_abs = options.tolerance_accel_warn_abs, .fail_abs = options.tolerance_accel_fail_abs, .basis = toleranceBasisFromOptions(options) });
+    drawComparisonPlot(plot_rects[2], 2, devices, .accel_z, "accel_z", .{ .fixed = .{ .min = cfg.plot.accel_min, .max = cfg.plot.accel_max } }, .fixed0, rl.Color.blue, shared_cursor, options, .{ .warn_abs = options.tolerance_accel_warn_abs, .fail_abs = options.tolerance_accel_fail_abs, .basis = toleranceBasisFromOptions(options) });
+    drawComparisonPlot(plot_rects[3], 3, devices, .gyro_norm, "gyro_norm", .{ .fixed = .{ .min = cfg.plot.gyro_norm_min, .max = cfg.plot.gyro_norm_max } }, .fixed0, cfg.renderer.trace_gyro_norm, shared_cursor, options, .{ .warn_abs = options.tolerance_gyro_warn_abs, .fail_abs = options.tolerance_gyro_fail_abs, .basis = toleranceBasisFromOptions(options) });
+    drawComparisonPlot(plot_rects[4], 4, devices, .elevation, "elevation", .{ .fixed = .{ .min = cfg.plot.elevation_min_deg, .max = cfg.plot.elevation_max_deg } }, .fixed0, rl.Color.orange, shared_cursor, options, .{ .warn_abs = options.tolerance_elevation_warn_abs, .fail_abs = options.tolerance_elevation_fail_abs, .basis = toleranceBasisFromOptions(options) });
+    drawComparisonPlot(plot_rects[5], 5, devices, .bearing, "bearing", .{ .fixed = .{ .min = cfg.plot.orientation_min_deg, .max = cfg.plot.orientation_max_deg } }, .fixed0, rl.Color.sky_blue, shared_cursor, options, .{ .warn_abs = options.tolerance_bearing_warn_abs, .fail_abs = options.tolerance_bearing_fail_abs, .basis = toleranceBasisFromOptions(options) });
 }
 
 fn drawComparisonPlot(
@@ -142,6 +143,7 @@ fn drawComparisonPlot(
     y_format: plotting.LabelFormat,
     base_color: rl.Color,
     shared_cursor: cursor.SharedCursor,
+    options: options_mod.RuntimeOptions,
     tolerance: plotting.ToleranceOptions,
 ) void {
     if (!isDrawableRect(rect)) return;
@@ -167,6 +169,7 @@ fn drawComparisonPlot(
             .label = "d",
             .color = cfg.renderer.delta_trace,
             .available = devices[0].snapshot.state == .connected and devices[1].snapshot.state == .connected,
+            .render_enabled = options.show_delta_series,
         };
         series_count += 1;
     }
@@ -182,9 +185,11 @@ fn drawComparisonPlot(
             .x_labels_relative_to_latest = true,
             .show_x_axis_label = false,
             .show_y_axis_label = false,
-            .show_legend = series_count > 1,
+            .show_legend = options.show_legend and series_count > 1,
             .y_domain = y_domain,
-            .cursor_x_norm = if (shared_cursor.active) shared_cursor.x_norm else null,
+            .cursor_x_norm = if (options.show_cursor and shared_cursor.active) shared_cursor.x_norm else null,
+            .show_stats_panel = options.show_stats_panel,
+            .show_tolerance = options.show_tolerance,
             .stats_key = plot_index,
             .tolerance = tolerance,
         },
@@ -238,6 +243,6 @@ fn deviceSeriesLabel(index: usize) []const u8 {
     };
 }
 
-fn toleranceBasisFromConfig() plotting.ToleranceBasis {
-    return if (cfg.plot.tolerance_use_stddev) .stddev else .peak_abs;
+fn toleranceBasisFromOptions(options: options_mod.RuntimeOptions) plotting.ToleranceBasis {
+    return if (options.tolerance_use_stddev) .stddev else .peak_abs;
 }

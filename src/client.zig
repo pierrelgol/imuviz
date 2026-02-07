@@ -6,6 +6,7 @@ const network = @import("client/network.zig");
 const History = @import("client/history.zig").History;
 const Renderer = @import("client/renderer.zig").Renderer;
 const DeviceFrame = @import("client/renderer.zig").DeviceFrame;
+const options_mod = @import("client/options.zig");
 const utils = @import("client/utils.zig");
 
 comptime {
@@ -13,6 +14,7 @@ comptime {
     std.testing.refAllDecls(network);
     std.testing.refAllDecls(History);
     std.testing.refAllDecls(DeviceFrame);
+    std.testing.refAllDecls(options_mod);
     std.testing.refAllDecls(utils);
 }
 
@@ -128,6 +130,8 @@ pub fn main(init: std.process.Init) !void {
     rl.setTargetFPS(cfg.target_fps);
 
     var histories: [cfg.max_hosts]History = [_]History{.{}} ** cfg.max_hosts;
+    var runtime_options: options_mod.RuntimeOptions = .{};
+    var options_menu: options_mod.Menu = .{};
     var renderer: Renderer = .{
         .root_layout_options = .{
             .scale_policy = .{
@@ -160,6 +164,7 @@ pub fn main(init: std.process.Init) !void {
 
     while (!rl.windowShouldClose() and !should_stop.load(.acquire)) {
         frame_count += 1;
+        options_menu.update(&runtime_options);
         for (0..args.hosts.count) |i| {
             const drained = client_network.drain(i, &drain_buffer);
             for (drain_buffer[0..drained]) |report| {
@@ -200,7 +205,8 @@ pub fn main(init: std.process.Init) !void {
         rl.beginDrawing();
         defer rl.endDrawing();
 
-        renderer.draw(frames[0..args.hosts.count]);
+        renderer.draw(frames[0..args.hosts.count], runtime_options);
+        options_menu.draw(runtime_options);
     }
 }
 

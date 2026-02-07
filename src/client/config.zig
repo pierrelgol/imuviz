@@ -155,6 +155,21 @@ pub const ui = struct {
     pub const comparison_plot_columns: usize = 2;
 };
 
+pub const options_menu = struct {
+    pub const toggle_key: rl.KeyboardKey = .f1;
+    pub const up_key: rl.KeyboardKey = .up;
+    pub const down_key: rl.KeyboardKey = .down;
+    pub const left_key: rl.KeyboardKey = .left;
+    pub const right_key: rl.KeyboardKey = .right;
+    pub const panel_width: f32 = 430.0;
+    pub const panel_max_height_ratio: f32 = 0.80;
+    pub const panel_margin: f32 = 16.0;
+    pub const panel_padding: f32 = 10.0;
+    pub const panel_line_gap: f32 = 18.0;
+    pub const title_size: i32 = 18;
+    pub const item_size: i32 = 14;
+};
+
 pub const scene3d = struct {
     pub const camera_pos: rl.Vector3 = .{ .x = 2.9, .y = 2.35, .z = 2.9 };
     pub const camera_target: rl.Vector3 = .{ .x = 0.0, .y = 0.55, .z = 0.0 };
