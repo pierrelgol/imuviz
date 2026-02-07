@@ -78,6 +78,17 @@ pub fn build(b: *std.Build) void {
         run_client_cmd.addArgs(args);
     }
 
+    const run_generator_step = b.step("run_generator", "Run the app");
+
+    const run_generator_cmd = b.addRunArtifact(host);
+    run_generator_step.dependOn(&run_generator_cmd.step);
+
+    run_generator_cmd.step.dependOn(b.getInstallStep());
+
+    if (b.args) |args| {
+        run_generator_cmd.addArgs(args);
+    }
+
     const common_mod_tests = b.addTest(.{
         .root_module = common_mod,
     });
