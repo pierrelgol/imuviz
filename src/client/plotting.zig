@@ -222,10 +222,11 @@ fn countVisiblePoints(series: []const SeriesDef, x_domain: AxisDomain, relative:
     var count: usize = 0;
     for (series) |s| {
         if (s.rhs_history) |_| {
-            for (0..s.history.len) |i| {
+            const pair_len = pairedSeriesLen(s);
+            for (0..pair_len) |i| {
                 const x = sampleXAtIndex(s.history, i, relative) orelse continue;
                 if (x < x_domain.min or x > x_domain.max) continue;
-                if (seriesValueAtX(s, x, x_domain, relative) != null) count += 1;
+                if (seriesValueAtIndex(s, i) != null) count += 1;
             }
             continue;
         }
@@ -246,10 +247,11 @@ fn computeYDomain(series: []const SeriesDef, x_domain: AxisDomain, relative: boo
 
     for (series) |s| {
         if (s.rhs_history) |_| {
-            for (0..s.history.len) |i| {
+            const pair_len = pairedSeriesLen(s);
+            for (0..pair_len) |i| {
                 const x = sampleXAtIndex(s.history, i, relative) orelse continue;
                 if (x < x_domain.min or x > x_domain.max) continue;
-                const v = seriesValueAtX(s, x, x_domain, relative) orelse continue;
+                const v = seriesValueAtIndex(s, i) orelse continue;
                 min_v = @min(min_v, v);
                 max_v = @max(max_v, v);
             }
@@ -351,12 +353,16 @@ fn drawSeries(series: []const SeriesDef, chart_rect: rl.Rectangle, x_domain: Axi
 fn drawOneSeries(s: SeriesDef, chart_rect: rl.Rectangle, x_domain: AxisDomain, y_domain: AxisDomain, relative: bool, style: PlotStyle, min_dim: f32) void {
     var prev: ?rl.Vector2 = null;
     const thickness = lineThickness(min_dim, style.stroke.trace_ratio);
-    for (0..s.history.len) |i| {
+    const len = if (s.rhs_history != null) pairedSeriesLen(s) else s.history.len;
+    for (0..len) |i| {
         const x_value = sampleXAtIndex(s.history, i, relative) orelse continue;
         if (x_value < x_domain.min or x_value > x_domain.max) continue;
 
         const x_norm = @as(f32, @floatCast((x_value - x_domain.min) / (x_domain.max - x_domain.min)));
-        const value = seriesValueAtX(s, x_value, x_domain, relative) orelse continue;
+        const value = if (s.rhs_history != null)
+            (seriesValueAtIndex(s, i) orelse continue)
+        else
+            (s.history.value(i, s.kind));
         const y_norm = @as(f32, @floatCast((@as(f64, value) - y_domain.min) / (y_domain.max - y_domain.min)));
         const point = rl.Vector2{
             .x = chart_rect.x + chart_rect.width * clamp01(x_norm),
@@ -435,6 +441,20 @@ fn drawCursorReadout(
 
 fn sampleAtCursor(s: SeriesDef, x_value: f64, x_domain: AxisDomain, relative: bool) ?f32 {
     return seriesValueAtX(s, x_value, x_domain, relative);
+}
+
+fn pairedSeriesLen(s: SeriesDef) usize {
+    if (s.rhs_history) |rhs| return @min(s.history.len, rhs.len);
+    return s.history.len;
+}
+
+fn seriesValueAtIndex(s: SeriesDef, index: usize) ?f32 {
+    const lhs = s.history.value(index, s.kind);
+    if (s.rhs_history) |rhs| {
+        if (index >= rhs.len) return null;
+        return lhs - rhs.value(index, s.kind);
+    }
+    return lhs;
 }
 
 fn sampleXAtIndex(history: *const History, logical_index: usize, relative: bool) ?f64 {
