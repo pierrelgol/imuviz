@@ -9,6 +9,8 @@ pub const SeriesDef = struct {
     kind: History.TraceKind,
     label: []const u8,
     color: rl.Color,
+    time_shift_seconds: f64 = 0.0,
+    rhs_time_shift_seconds: f64 = 0.0,
     available: bool = true,
 };
 
@@ -270,7 +272,7 @@ fn countVisiblePoints(series: []const SeriesDef, x_domain: AxisDomain, relative:
         if (s.rhs_history) |_| {
             const pair_len = pairedSeriesLen(s);
             for (0..pair_len) |i| {
-                const x = sampleXAtIndex(s.history, i, relative) orelse continue;
+                const x = sampleXAtIndex(s.history, i, relative, s.time_shift_seconds) orelse continue;
                 if (x < x_domain.min or x > x_domain.max) continue;
                 if (seriesValueAtIndex(s, i) != null) count += 1;
             }
@@ -280,7 +282,7 @@ fn countVisiblePoints(series: []const SeriesDef, x_domain: AxisDomain, relative:
         const latest_ts = s.history.latestTimestamp() orelse continue;
         for (0..s.history.len) |i| {
             const sample = s.history.sample(i);
-            const x = if (relative) sample.timestamp - latest_ts else sample.timestamp;
+            const x = (if (relative) sample.timestamp - latest_ts else sample.timestamp) + s.time_shift_seconds;
             if (x >= x_domain.min and x <= x_domain.max) count += 1;
         }
     }
@@ -295,7 +297,7 @@ fn computeYDomain(series: []const SeriesDef, x_domain: AxisDomain, relative: boo
         if (s.rhs_history) |_| {
             const pair_len = pairedSeriesLen(s);
             for (0..pair_len) |i| {
-                const x = sampleXAtIndex(s.history, i, relative) orelse continue;
+                const x = sampleXAtIndex(s.history, i, relative, s.time_shift_seconds) orelse continue;
                 if (x < x_domain.min or x > x_domain.max) continue;
                 const v = seriesValueAtIndex(s, i) orelse continue;
                 min_v = @min(min_v, v);
@@ -307,7 +309,7 @@ fn computeYDomain(series: []const SeriesDef, x_domain: AxisDomain, relative: boo
         const latest_ts = s.history.latestTimestamp() orelse continue;
         for (0..s.history.len) |i| {
             const sample = s.history.sample(i);
-            const x = if (relative) sample.timestamp - latest_ts else sample.timestamp;
+            const x = (if (relative) sample.timestamp - latest_ts else sample.timestamp) + s.time_shift_seconds;
             if (x < x_domain.min or x > x_domain.max) continue;
             const v = s.history.value(i, s.kind);
             min_v = @min(min_v, v);
@@ -401,7 +403,7 @@ fn drawOneSeries(s: SeriesDef, chart_rect: rl.Rectangle, x_domain: AxisDomain, y
     const thickness = lineThickness(min_dim, style.stroke.trace_ratio);
     const len = if (s.rhs_history != null) pairedSeriesLen(s) else s.history.len;
     for (0..len) |i| {
-        const x_value = sampleXAtIndex(s.history, i, relative) orelse continue;
+        const x_value = sampleXAtIndex(s.history, i, relative, s.time_shift_seconds) orelse continue;
         if (x_value < x_domain.min or x_value > x_domain.max) continue;
 
         const x_norm = @as(f32, @floatCast((x_value - x_domain.min) / (x_domain.max - x_domain.min)));
@@ -584,7 +586,7 @@ fn computeSeriesStats(s: SeriesDef, x_domain: AxisDomain, relative: bool) ?Serie
 
     const len = if (s.rhs_history != null) pairedSeriesLen(s) else s.history.len;
     for (0..len) |i| {
-        const x = sampleXAtIndex(s.history, i, relative) orelse continue;
+        const x = sampleXAtIndex(s.history, i, relative, s.time_shift_seconds) orelse continue;
         if (x < x_domain.min or x > x_domain.max) continue;
         const v = seriesValueAtIndex(s, i) orelse continue;
         min_v = @min(min_v, v);
@@ -657,7 +659,7 @@ fn evaluateToleranceState(series: []const SeriesDef, x_domain: AxisDomain, relat
         if (tol.mode == .all_series or s.rhs_history != null) {
             const len = if (s.rhs_history != null) pairedSeriesLen(s) else s.history.len;
             for (0..len) |i| {
-                const x = sampleXAtIndex(s.history, i, relative) orelse continue;
+                const x = sampleXAtIndex(s.history, i, relative, s.time_shift_seconds) orelse continue;
                 if (x < x_domain.min or x > x_domain.max) continue;
                 const v = if (s.rhs_history != null)
                     (seriesValueAtIndex(s, i) orelse continue)
@@ -786,19 +788,19 @@ fn seriesValueAtIndex(s: SeriesDef, index: usize) ?f32 {
     return lhs;
 }
 
-fn sampleXAtIndex(history: *const History, logical_index: usize, relative: bool) ?f64 {
+fn sampleXAtIndex(history: *const History, logical_index: usize, relative: bool, shift_seconds: f64) ?f64 {
     const sample = history.sample(logical_index);
-    if (!relative) return sample.timestamp;
+    if (!relative) return sample.timestamp + shift_seconds;
     const latest_ts = history.latestTimestamp() orelse return null;
-    return sample.timestamp - latest_ts;
+    return sample.timestamp - latest_ts + shift_seconds;
 }
 
-fn valueNearestX(history: *const History, kind: History.TraceKind, x_value: f64, x_domain: AxisDomain, relative: bool) ?f32 {
+fn valueNearestX(history: *const History, kind: History.TraceKind, x_value: f64, x_domain: AxisDomain, relative: bool, shift_seconds: f64) ?f32 {
     var best: ?f32 = null;
     var best_dist = std.math.inf(f64);
 
     for (0..history.len) |i| {
-        const sx = sampleXAtIndex(history, i, relative) orelse continue;
+        const sx = sampleXAtIndex(history, i, relative, shift_seconds) orelse continue;
         if (sx < x_domain.min or sx > x_domain.max) continue;
         const dist = @abs(sx - x_value);
         if (dist < best_dist) {
@@ -810,9 +812,9 @@ fn valueNearestX(history: *const History, kind: History.TraceKind, x_value: f64,
 }
 
 fn seriesValueAtX(s: SeriesDef, x_value: f64, x_domain: AxisDomain, relative: bool) ?f32 {
-    const lhs = valueNearestX(s.history, s.kind, x_value, x_domain, relative) orelse return null;
+    const lhs = valueNearestX(s.history, s.kind, x_value, x_domain, relative, s.time_shift_seconds) orelse return null;
     if (s.rhs_history) |rhs| {
-        const rhs_v = valueNearestX(rhs, s.kind, x_value, x_domain, relative) orelse return null;
+        const rhs_v = valueNearestX(rhs, s.kind, x_value, x_domain, relative, s.rhs_time_shift_seconds) orelse return null;
         return lhs - rhs_v;
     }
     return lhs;

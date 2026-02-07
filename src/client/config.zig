@@ -18,6 +18,15 @@ pub const trace_network: bool = true;
 pub const trace_network_timeouts: bool = false;
 pub const trace_network_payloads: bool = false;
 
+pub const alignment = struct {
+    pub const enabled: bool = true;
+    pub const apply_render_shift: bool = true;
+    pub const update_interval_seconds: f64 = 1.0;
+    pub const max_lag_seconds: f64 = 1.0;
+    pub const min_points: usize = 64;
+    pub const max_samples: usize = 2048;
+};
+
 pub const plot = struct {
     pub const raw_x_graduations: usize = 6;
     pub const raw_y_graduations: usize = 6;
@@ -96,6 +105,7 @@ pub const renderer = struct {
     pub const current_values_size: i32 = 14;
     pub const fps_top_padding: f32 = 8.0;
     pub const fps_right_padding: f32 = 12.0;
+    pub const lag_right_padding: f32 = 120.0;
     pub const panel_title_padding_scale: f32 = 0.8;
     pub const status_text_x_offset: f32 = 180.0;
     pub const status_text_y_offset: f32 = 2.0;

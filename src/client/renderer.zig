@@ -6,6 +6,7 @@ const net = @import("network.zig");
 const plotting = @import("plotting.zig");
 const scene3d = @import("scene3d.zig");
 const cursor = @import("cursor.zig");
+const alignment = @import("alignment.zig");
 const History = @import("history.zig").History;
 const drawTextFmt = @import("utils.zig").drawTextFmt;
 
@@ -18,6 +19,7 @@ pub const DeviceFrame = struct {
 pub const Renderer = struct {
     scenes: [cfg.max_hosts]scene3d.SceneTarget = [_]scene3d.SceneTarget{.{}} ** cfg.max_hosts,
     shared_cursor: cursor.SharedCursor = .{},
+    lag_estimator: alignment.Estimator = .{},
     root_layout_options: ui.RootLayoutOptions = .{},
     comparison_layout_options: ui.ComparisonLayoutOptions = .{},
 
@@ -32,20 +34,33 @@ pub const Renderer = struct {
 
         const root = ui.computeRootLayout(screen_w, screen_h, self.root_layout_options);
         const cmp = ui.splitComparison(root.body, root.scale, draw_count, self.comparison_layout_options);
+        const lag = self.updateAlignment(devices[0..draw_count]);
 
         rl.clearBackground(cfg.theme.background);
-        drawTitleBar(root.title, draw_count);
+        drawTitleBar(root.title, draw_count, lag);
 
         for (devices[0..draw_count], 0..) |device, i| {
             drawSceneCard(&self.scenes[i], cmp.scenes[i], root.scale, device);
         }
 
         self.shared_cursor.update(cmp.plots);
-        drawSharedPlots(cmp.plots, devices[0..draw_count], self.shared_cursor);
+        drawSharedPlots(cmp.plots, devices[0..draw_count], self.shared_cursor, lag);
+    }
+
+    fn updateAlignment(self: *Renderer, devices: []const DeviceFrame) alignment.Estimate {
+        var hist: [cfg.max_hosts]*const History = undefined;
+        var connected: [cfg.max_hosts]bool = undefined;
+        const n = @min(devices.len, cfg.max_hosts);
+        for (0..n) |i| {
+            hist[i] = devices[i].history;
+            connected[i] = devices[i].snapshot.state == .connected;
+        }
+        self.lag_estimator.update(hist[0..n], connected[0..n]);
+        return self.lag_estimator.last;
     }
 };
 
-fn drawTitleBar(title_rect: rl.Rectangle, device_count: usize) void {
+fn drawTitleBar(title_rect: rl.Rectangle, device_count: usize, lag: alignment.Estimate) void {
     rl.drawRectangleRec(title_rect, cfg.theme.title_panel);
     rl.drawRectangleLinesEx(title_rect, cfg.renderer.panel_border_thickness, cfg.renderer.title_border);
     drawTextFmt(
@@ -56,7 +71,20 @@ fn drawTitleBar(title_rect: rl.Rectangle, device_count: usize) void {
         cfg.renderer.panel_title_size,
         cfg.theme.text_primary,
     );
+    if (lag.available) drawLagSummary(title_rect, lag);
     drawFpsTopRight(title_rect);
+}
+
+fn drawLagSummary(title_rect: rl.Rectangle, lag: alignment.Estimate) void {
+    var lag_buf: [96]u8 = undefined;
+    const lag_ms = lag.lag_seconds * 1000.0;
+    const sign: []const u8 = if (lag_ms >= 0.0) "+" else "";
+    const lag_text = std.fmt.bufPrintZ(&lag_buf, "Lag(2-1): {s}{d:.0}ms r={d:.2}", .{ sign, lag_ms, lag.correlation }) catch return;
+    const font_size = cfg.renderer.status_text_size;
+    const text_w = rl.measureText(lag_text, font_size);
+    const x: i32 = @intFromFloat(title_rect.x + title_rect.width - @as(f32, @floatFromInt(text_w)) - cfg.renderer.lag_right_padding);
+    const y: i32 = @intFromFloat(title_rect.y + cfg.renderer.fps_top_padding);
+    rl.drawText(lag_text, x, y, font_size, cfg.theme.text_secondary);
 }
 
 fn drawFpsTopRight(title_rect: rl.Rectangle) void {
@@ -123,13 +151,13 @@ fn drawCurrentValues(card_rect: rl.Rectangle, history: *const History) void {
     );
 }
 
-fn drawSharedPlots(plot_rects: [cfg.ui.chart_count]rl.Rectangle, devices: []const DeviceFrame, shared_cursor: cursor.SharedCursor) void {
-    drawComparisonPlot(plot_rects[0], 0, devices, .accel_x, "accel_x", .{ .fixed = .{ .min = cfg.plot.accel_min, .max = cfg.plot.accel_max } }, .fixed0, rl.Color.red, shared_cursor, .{ .warn_abs = cfg.plot.tolerance_accel_warn_abs, .fail_abs = cfg.plot.tolerance_accel_fail_abs, .basis = toleranceBasisFromConfig() });
-    drawComparisonPlot(plot_rects[1], 1, devices, .accel_y, "accel_y", .{ .fixed = .{ .min = cfg.plot.accel_min, .max = cfg.plot.accel_max } }, .fixed0, rl.Color.green, shared_cursor, .{ .warn_abs = cfg.plot.tolerance_accel_warn_abs, .fail_abs = cfg.plot.tolerance_accel_fail_abs, .basis = toleranceBasisFromConfig() });
-    drawComparisonPlot(plot_rects[2], 2, devices, .accel_z, "accel_z", .{ .fixed = .{ .min = cfg.plot.accel_min, .max = cfg.plot.accel_max } }, .fixed0, rl.Color.blue, shared_cursor, .{ .warn_abs = cfg.plot.tolerance_accel_warn_abs, .fail_abs = cfg.plot.tolerance_accel_fail_abs, .basis = toleranceBasisFromConfig() });
-    drawComparisonPlot(plot_rects[3], 3, devices, .gyro_norm, "gyro_norm", .{ .fixed = .{ .min = cfg.plot.gyro_norm_min, .max = cfg.plot.gyro_norm_max } }, .fixed0, cfg.renderer.trace_gyro_norm, shared_cursor, .{ .warn_abs = cfg.plot.tolerance_gyro_warn_abs, .fail_abs = cfg.plot.tolerance_gyro_fail_abs, .basis = toleranceBasisFromConfig() });
-    drawComparisonPlot(plot_rects[4], 4, devices, .elevation, "elevation", .{ .fixed = .{ .min = cfg.plot.elevation_min_deg, .max = cfg.plot.elevation_max_deg } }, .fixed0, rl.Color.orange, shared_cursor, .{ .warn_abs = cfg.plot.tolerance_elevation_warn_abs, .fail_abs = cfg.plot.tolerance_elevation_fail_abs, .basis = toleranceBasisFromConfig() });
-    drawComparisonPlot(plot_rects[5], 5, devices, .bearing, "bearing", .{ .fixed = .{ .min = cfg.plot.orientation_min_deg, .max = cfg.plot.orientation_max_deg } }, .fixed0, rl.Color.sky_blue, shared_cursor, .{ .warn_abs = cfg.plot.tolerance_bearing_warn_abs, .fail_abs = cfg.plot.tolerance_bearing_fail_abs, .basis = toleranceBasisFromConfig() });
+fn drawSharedPlots(plot_rects: [cfg.ui.chart_count]rl.Rectangle, devices: []const DeviceFrame, shared_cursor: cursor.SharedCursor, lag: alignment.Estimate) void {
+    drawComparisonPlot(plot_rects[0], 0, devices, .accel_x, "accel_x", .{ .fixed = .{ .min = cfg.plot.accel_min, .max = cfg.plot.accel_max } }, .fixed0, rl.Color.red, shared_cursor, lag, .{ .warn_abs = cfg.plot.tolerance_accel_warn_abs, .fail_abs = cfg.plot.tolerance_accel_fail_abs, .basis = toleranceBasisFromConfig() });
+    drawComparisonPlot(plot_rects[1], 1, devices, .accel_y, "accel_y", .{ .fixed = .{ .min = cfg.plot.accel_min, .max = cfg.plot.accel_max } }, .fixed0, rl.Color.green, shared_cursor, lag, .{ .warn_abs = cfg.plot.tolerance_accel_warn_abs, .fail_abs = cfg.plot.tolerance_accel_fail_abs, .basis = toleranceBasisFromConfig() });
+    drawComparisonPlot(plot_rects[2], 2, devices, .accel_z, "accel_z", .{ .fixed = .{ .min = cfg.plot.accel_min, .max = cfg.plot.accel_max } }, .fixed0, rl.Color.blue, shared_cursor, lag, .{ .warn_abs = cfg.plot.tolerance_accel_warn_abs, .fail_abs = cfg.plot.tolerance_accel_fail_abs, .basis = toleranceBasisFromConfig() });
+    drawComparisonPlot(plot_rects[3], 3, devices, .gyro_norm, "gyro_norm", .{ .fixed = .{ .min = cfg.plot.gyro_norm_min, .max = cfg.plot.gyro_norm_max } }, .fixed0, cfg.renderer.trace_gyro_norm, shared_cursor, lag, .{ .warn_abs = cfg.plot.tolerance_gyro_warn_abs, .fail_abs = cfg.plot.tolerance_gyro_fail_abs, .basis = toleranceBasisFromConfig() });
+    drawComparisonPlot(plot_rects[4], 4, devices, .elevation, "elevation", .{ .fixed = .{ .min = cfg.plot.elevation_min_deg, .max = cfg.plot.elevation_max_deg } }, .fixed0, rl.Color.orange, shared_cursor, lag, .{ .warn_abs = cfg.plot.tolerance_elevation_warn_abs, .fail_abs = cfg.plot.tolerance_elevation_fail_abs, .basis = toleranceBasisFromConfig() });
+    drawComparisonPlot(plot_rects[5], 5, devices, .bearing, "bearing", .{ .fixed = .{ .min = cfg.plot.orientation_min_deg, .max = cfg.plot.orientation_max_deg } }, .fixed0, rl.Color.sky_blue, shared_cursor, lag, .{ .warn_abs = cfg.plot.tolerance_bearing_warn_abs, .fail_abs = cfg.plot.tolerance_bearing_fail_abs, .basis = toleranceBasisFromConfig() });
 }
 
 fn drawComparisonPlot(
@@ -142,6 +170,7 @@ fn drawComparisonPlot(
     y_format: plotting.LabelFormat,
     base_color: rl.Color,
     shared_cursor: cursor.SharedCursor,
+    lag: alignment.Estimate,
     tolerance: plotting.ToleranceOptions,
 ) void {
     if (!isDrawableRect(rect)) return;
@@ -155,17 +184,20 @@ fn drawComparisonPlot(
             .kind = kind,
             .label = deviceSeriesLabel(i),
             .color = shadeForDevice(base_color, i, n),
+            .time_shift_seconds = if (i == 1 and cfg.alignment.apply_render_shift and lag.available) -lag.lag_seconds else 0.0,
             .available = devices[i].snapshot.state == .connected,
         };
         series_count += 1;
     }
     if (cfg.plot.show_delta_series and n >= 2) {
+        const shift_imu2 = if (cfg.alignment.apply_render_shift and lag.available) -lag.lag_seconds else 0.0;
         series_buffer[series_count] = .{
             .history = devices[0].history,
             .rhs_history = devices[1].history,
             .kind = kind,
             .label = "d",
             .color = cfg.renderer.delta_trace,
+            .rhs_time_shift_seconds = shift_imu2,
             .available = devices[0].snapshot.state == .connected and devices[1].snapshot.state == .connected,
         };
         series_count += 1;
