@@ -40,11 +40,29 @@ pub const PlotOptions = struct {
     cursor_x_norm: ?f32 = null,
     show_stats_panel: bool = cfg.plot.show_stats_panel,
     stats_key: ?usize = null,
+    tolerance: ?ToleranceOptions = null,
 };
 
 pub const YDomain = union(enum) {
     dynamic,
     fixed: AxisDomain,
+};
+
+pub const ToleranceMode = enum {
+    delta_only,
+    all_series,
+};
+
+pub const ToleranceBasis = enum {
+    peak_abs,
+    stddev,
+};
+
+pub const ToleranceOptions = struct {
+    warn_abs: f32,
+    fail_abs: f32,
+    mode: ToleranceMode = .delta_only,
+    basis: ToleranceBasis = .peak_abs,
 };
 
 pub const PlotStyle = struct {
@@ -65,6 +83,11 @@ pub const PlotStyle = struct {
         legend_text: rl.Color = rl.Color.light_gray,
         cursor_line: rl.Color = rgba(238, 242, 252, 176),
         cursor_panel_fill: rl.Color = cfg.plot.cursor_column_fill,
+        tolerance_warn: rl.Color = rgba(247, 196, 80, 190),
+        tolerance_fail: rl.Color = rgba(235, 94, 94, 210),
+        tolerance_warn_fill: rl.Color = rgba(247, 196, 80, 36),
+        tolerance_fail_fill: rl.Color = rgba(235, 94, 94, 44),
+        tolerance_pass: rl.Color = cfg.renderer.status_connected,
     };
 
     pub const Layout = struct {
@@ -122,6 +145,11 @@ pub fn drawPlot(rect: rl.Rectangle, options: PlotOptions, style: PlotStyle) void
     else
         .{ .min = absoluteLatest(options.series) - options.x_window_seconds, .max = absoluteLatest(options.series) };
 
+    const tolerance_state = if (options.tolerance) |tol|
+        evaluateToleranceState(options.series, x_domain, options.x_labels_relative_to_latest, tol)
+    else
+        null;
+
     drawSidePanel(
         rect,
         options.series,
@@ -130,6 +158,7 @@ pub fn drawPlot(rect: rl.Rectangle, options: PlotOptions, style: PlotStyle) void
         options.cursor_x_norm,
         options.show_stats_panel,
         options.stats_key,
+        tolerance_state,
         style,
         min_dim,
     );
@@ -149,6 +178,9 @@ pub fn drawPlot(rect: rl.Rectangle, options: PlotOptions, style: PlotStyle) void
     }
 
     drawGrid(chart_rect, options.x_axis.graduation_count, options.y_axis.graduation_count, style, min_dim);
+    if (cfg.plot.show_tolerance_overlay) {
+        if (options.tolerance) |tol| drawToleranceOverlay(chart_rect, y_domain, tol, tolerance_state orelse .na, style, min_dim);
+    }
     drawAxisGraduations(.x, chart_rect, x_domain, options.x_axis, style, min_dim);
     drawAxisGraduations(.y, chart_rect, y_domain, options.y_axis, style, min_dim);
     drawAxisLabels(rect, chart_rect, options, style, min_dim);
@@ -412,6 +444,7 @@ fn drawSidePanel(
     cursor_x_norm: ?f32,
     show_stats_panel: bool,
     stats_key: ?usize,
+    tolerance_state: ?ToleranceState,
     style: PlotStyle,
     min_dim: f32,
 ) void {
@@ -426,6 +459,13 @@ fn drawSidePanel(
     const section_gap: i32 = @max(1, @as(i32, @intFromFloat(panel.height * cfg.plot.stats_section_gap_ratio)));
 
     var y = origin_y;
+    if (tolerance_state) |state| {
+        var tol_buf: [64]u8 = undefined;
+        const tol_text = std.fmt.bufPrintZ(&tol_buf, "Tolerance: {s}", .{toleranceStateText(state)}) catch return;
+        rl.drawText(tol_text, origin_x, y, cursor_font, toleranceStateColor(state, style));
+        y += section_gap;
+    }
+
     if (cursor_x_norm) |cursor_x| {
         const x_value = lerpF64(x_domain.min, x_domain.max, @as(f64, @floatCast(clamp01(cursor_x))));
         var time_buf: [64]u8 = undefined;
@@ -467,6 +507,13 @@ const SeriesStats = struct {
     stddev: f64,
     rms: f64,
     count: usize,
+};
+
+const ToleranceState = enum {
+    na,
+    pass,
+    warn,
+    fail,
 };
 
 const max_series_per_plot = cfg.max_hosts + 1;
@@ -595,6 +642,130 @@ fn clearSeriesName(label: []const u8) []const u8 {
     if (std.mem.eql(u8, label, "2")) return "IMU 2";
     if (std.mem.eql(u8, label, "d")) return "Delta";
     return label;
+}
+
+fn evaluateToleranceState(series: []const SeriesDef, x_domain: AxisDomain, relative: bool, tol: ToleranceOptions) ToleranceState {
+    if (series.len == 0) return .na;
+    if (tol.basis == .stddev) return evaluateToleranceByStdDev(series, x_domain, relative, tol);
+
+    var has_sample = false;
+    var state: ToleranceState = .pass;
+
+    for (series) |s| {
+        if (!s.available) continue;
+        if (tol.mode == .delta_only and s.rhs_history == null) continue;
+        if (tol.mode == .all_series or s.rhs_history != null) {
+            const len = if (s.rhs_history != null) pairedSeriesLen(s) else s.history.len;
+            for (0..len) |i| {
+                const x = sampleXAtIndex(s.history, i, relative) orelse continue;
+                if (x < x_domain.min or x > x_domain.max) continue;
+                const v = if (s.rhs_history != null)
+                    (seriesValueAtIndex(s, i) orelse continue)
+                else
+                    s.history.value(i, s.kind);
+                has_sample = true;
+                const abs_v = @abs(v);
+                if (abs_v > tol.fail_abs) return .fail;
+                if (abs_v > tol.warn_abs) state = .warn;
+            }
+        }
+    }
+    return if (has_sample) state else .na;
+}
+
+fn evaluateToleranceByStdDev(series: []const SeriesDef, x_domain: AxisDomain, relative: bool, tol: ToleranceOptions) ToleranceState {
+    var has_sample = false;
+    var state: ToleranceState = .pass;
+
+    for (series) |s| {
+        if (!s.available) continue;
+        if (tol.mode == .delta_only and s.rhs_history == null) continue;
+        if (!(tol.mode == .all_series or s.rhs_history != null)) continue;
+
+        const stats = computeSeriesStats(s, x_domain, relative) orelse continue;
+        has_sample = true;
+        const sigma: f32 = @floatCast(stats.stddev);
+        if (sigma > tol.fail_abs) return .fail;
+        if (sigma > tol.warn_abs) state = .warn;
+    }
+
+    return if (has_sample) state else .na;
+}
+
+fn drawToleranceOverlay(
+    chart_rect: rl.Rectangle,
+    y_domain: AxisDomain,
+    tol: ToleranceOptions,
+    state: ToleranceState,
+    style: PlotStyle,
+    min_dim: f32,
+) void {
+    if (tol.fail_abs <= 0 or tol.warn_abs <= 0) return;
+    const warn_abs: f64 = @as(f64, @floatCast(@min(tol.warn_abs, tol.fail_abs)));
+    const fail_abs: f64 = @as(f64, @floatCast(@max(tol.warn_abs, tol.fail_abs)));
+    const y_min = y_domain.min;
+    const y_max = y_domain.max;
+    if (y_max <= y_min) return;
+
+    // Filled tolerance zones around 0 for quick scan.
+    drawToleranceBand(chart_rect, y_min, y_max, -fail_abs, -warn_abs, style.palette.tolerance_fail_fill);
+    drawToleranceBand(chart_rect, y_min, y_max, warn_abs, fail_abs, style.palette.tolerance_fail_fill);
+    drawToleranceBand(chart_rect, y_min, y_max, -warn_abs, 0.0, style.palette.tolerance_warn_fill);
+    drawToleranceBand(chart_rect, y_min, y_max, 0.0, warn_abs, style.palette.tolerance_warn_fill);
+
+    const line_w = lineThickness(min_dim, style.stroke.grid_ratio);
+    drawHorizontalToleranceLine(chart_rect, y_min, y_max, warn_abs, line_w, style.palette.tolerance_warn);
+    drawHorizontalToleranceLine(chart_rect, y_min, y_max, -warn_abs, line_w, style.palette.tolerance_warn);
+    drawHorizontalToleranceLine(chart_rect, y_min, y_max, fail_abs, line_w, style.palette.tolerance_fail);
+    drawHorizontalToleranceLine(chart_rect, y_min, y_max, -fail_abs, line_w, style.palette.tolerance_fail);
+
+    if (state != .na) {
+        const border_color = toleranceStateColor(state, style);
+        rl.drawRectangleLinesEx(chart_rect, @max(1.0, lineThickness(min_dim, style.stroke.border_ratio) + 0.5), border_color);
+    }
+}
+
+fn drawToleranceBand(chart_rect: rl.Rectangle, y_min: f64, y_max: f64, band_min: f64, band_max: f64, color: rl.Color) void {
+    const lo = @max(y_min, @min(band_min, band_max));
+    const hi = @min(y_max, @max(band_min, band_max));
+    if (hi <= lo) return;
+    const y_top = valueToScreenY(chart_rect, y_min, y_max, hi);
+    const y_bottom = valueToScreenY(chart_rect, y_min, y_max, lo);
+    rl.drawRectangleRec(.{
+        .x = chart_rect.x,
+        .y = y_top,
+        .width = chart_rect.width,
+        .height = @max(1.0, y_bottom - y_top),
+    }, color);
+}
+
+fn drawHorizontalToleranceLine(chart_rect: rl.Rectangle, y_min: f64, y_max: f64, value: f64, thickness: f32, color: rl.Color) void {
+    if (value < y_min or value > y_max) return;
+    const y = valueToScreenY(chart_rect, y_min, y_max, value);
+    rl.drawLineEx(.{ .x = chart_rect.x, .y = y }, .{ .x = chart_rect.x + chart_rect.width, .y = y }, thickness, color);
+}
+
+fn valueToScreenY(chart_rect: rl.Rectangle, y_min: f64, y_max: f64, value: f64) f32 {
+    const t = @as(f32, @floatCast((value - y_min) / (y_max - y_min)));
+    return chart_rect.y + chart_rect.height * (1.0 - clamp01(t));
+}
+
+fn toleranceStateText(state: ToleranceState) []const u8 {
+    return switch (state) {
+        .na => "N/A",
+        .pass => "PASS",
+        .warn => "WARN",
+        .fail => "FAIL",
+    };
+}
+
+fn toleranceStateColor(state: ToleranceState, style: PlotStyle) rl.Color {
+    return switch (state) {
+        .na => style.palette.empty_text,
+        .pass => style.palette.tolerance_pass,
+        .warn => style.palette.tolerance_warn,
+        .fail => style.palette.tolerance_fail,
+    };
 }
 
 fn sampleAtCursor(s: SeriesDef, x_value: f64, x_domain: AxisDomain, relative: bool) ?f32 {

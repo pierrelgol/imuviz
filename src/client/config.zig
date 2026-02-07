@@ -71,6 +71,16 @@ pub const plot = struct {
     pub const stats_size_ratio: f32 = 0.032;
     pub const stats_line_gap_ratio: f32 = 0.070;
     pub const stats_section_gap_ratio: f32 = 0.040;
+    pub const show_tolerance_overlay: bool = true;
+    pub const tolerance_use_stddev: bool = true;
+    pub const tolerance_accel_warn_abs: f32 = 200.0;
+    pub const tolerance_accel_fail_abs: f32 = 1000.0;
+    pub const tolerance_gyro_warn_abs: f32 = 1200.0;
+    pub const tolerance_gyro_fail_abs: f32 = 4000.0;
+    pub const tolerance_elevation_warn_abs: f32 = 8.0;
+    pub const tolerance_elevation_fail_abs: f32 = 20.0;
+    pub const tolerance_bearing_warn_abs: f32 = 15.0;
+    pub const tolerance_bearing_fail_abs: f32 = 35.0;
 };
 
 pub const window_initial_width: i32 = 1600;
