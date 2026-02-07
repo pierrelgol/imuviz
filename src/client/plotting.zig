@@ -8,6 +8,7 @@ pub const SeriesDef = struct {
     kind: History.TraceKind,
     label: []const u8,
     color: rl.Color,
+    available: bool = true,
 };
 
 pub const LabelFormat = enum {
@@ -35,6 +36,7 @@ pub const PlotOptions = struct {
     empty_message: []const u8 = "Waiting for data...",
     min_samples: usize = cfg.plot.min_samples,
     y_domain: YDomain = .dynamic,
+    cursor_x_norm: ?f32 = null,
 };
 
 pub const YDomain = union(enum) {
@@ -58,6 +60,8 @@ pub const PlotStyle = struct {
         tick: rl.Color = rl.Color.light_gray,
         empty_text: rl.Color = rl.Color.gray,
         legend_text: rl.Color = rl.Color.light_gray,
+        cursor_line: rl.Color = rgba(238, 242, 252, 176),
+        cursor_panel_fill: rl.Color = cfg.plot.cursor_column_fill,
     };
 
     pub const Layout = struct {
@@ -70,6 +74,9 @@ pub const PlotStyle = struct {
         title_offset_ratio: f32 = cfg.plot.title_offset_ratio,
         legend_offset_ratio: f32 = cfg.plot.legend_offset_ratio,
         legend_item_gap_ratio: f32 = cfg.plot.legend_item_gap_ratio,
+        cursor_readout_offset_ratio: f32 = cfg.plot.cursor_readout_offset_ratio,
+        cursor_readout_line_gap_ratio: f32 = cfg.plot.cursor_readout_line_gap_ratio,
+        cursor_column_right_gap_ratio: f32 = cfg.plot.cursor_column_right_gap_ratio,
     };
 
     pub const Typography = struct {
@@ -78,6 +85,7 @@ pub const PlotStyle = struct {
         tick_label_size_ratio: f32 = cfg.plot.tick_label_size_ratio,
         legend_size_ratio: f32 = cfg.plot.legend_size_ratio,
         empty_size_ratio: f32 = cfg.plot.empty_size_ratio,
+        cursor_readout_size_ratio: f32 = cfg.plot.cursor_readout_size_ratio,
         min_font_px: i32 = cfg.plot.min_font_px,
     };
 
@@ -85,6 +93,7 @@ pub const PlotStyle = struct {
         border_ratio: f32 = cfg.plot.border_ratio,
         grid_ratio: f32 = cfg.plot.grid_ratio,
         trace_ratio: f32 = cfg.plot.trace_ratio,
+        cursor_line_ratio: f32 = cfg.plot.cursor_line_ratio,
     };
 };
 
@@ -126,6 +135,9 @@ pub fn drawPlot(rect: rl.Rectangle, options: PlotOptions, style: PlotStyle) void
     drawAxisLabels(rect, chart_rect, options, style, min_dim);
 
     drawSeries(options.series, chart_rect, x_domain, y_domain, options.x_labels_relative_to_latest, style, min_dim);
+    if (options.cursor_x_norm) |cursor_x| {
+        drawCursorOverlay(rect, chart_rect, options.series, x_domain, options.x_labels_relative_to_latest, cursor_x, style, min_dim);
+    }
 
     if (options.show_legend) drawLegend(rect, options.series, style, min_dim);
 }
@@ -305,6 +317,98 @@ fn drawOneSeries(s: SeriesDef, chart_rect: rl.Rectangle, x_domain: AxisDomain, y
         if (prev) |p| rl.drawLineEx(p, point, thickness, s.color);
         prev = point;
     }
+}
+
+fn drawCursorOverlay(
+    rect: rl.Rectangle,
+    chart_rect: rl.Rectangle,
+    series: []const SeriesDef,
+    x_domain: AxisDomain,
+    relative: bool,
+    cursor_x_norm: f32,
+    style: PlotStyle,
+    min_dim: f32,
+) void {
+    const t = clamp01(cursor_x_norm);
+    const x = chart_rect.x + chart_rect.width * t;
+    const thickness = lineThickness(min_dim, style.stroke.cursor_line_ratio);
+    rl.drawLineEx(
+        .{ .x = x, .y = chart_rect.y },
+        .{ .x = x, .y = chart_rect.y + chart_rect.height },
+        thickness,
+        style.palette.cursor_line,
+    );
+
+    const x_value = lerpF64(x_domain.min, x_domain.max, @as(f64, @floatCast(t)));
+    drawCursorReadout(rect, chart_rect, series, x_value, x_domain, relative, style, min_dim);
+}
+
+fn drawCursorReadout(
+    rect: rl.Rectangle,
+    chart_rect: rl.Rectangle,
+    series: []const SeriesDef,
+    x_value: f64,
+    x_domain: AxisDomain,
+    relative: bool,
+    style: PlotStyle,
+    min_dim: f32,
+) void {
+    const font = fontSize(min_dim, style.typography.cursor_readout_size_ratio, style.typography.min_font_px);
+    const column_left = rect.x + rect.width * style.layout.cursor_readout_offset_ratio;
+    const column_right = chart_rect.x - rect.width * style.layout.cursor_column_right_gap_ratio;
+    if (column_right - column_left < 20.0) return;
+
+    const panel = rl.Rectangle{
+        .x = column_left,
+        .y = rect.y,
+        .width = @max(1.0, column_right - column_left),
+        .height = rect.height,
+    };
+    rl.drawRectangleRec(panel, style.palette.cursor_panel_fill);
+
+    const origin_x: i32 = @intFromFloat(column_left + 4.0);
+    const origin_y: i32 = @intFromFloat(rect.y + rect.height * style.layout.cursor_readout_offset_ratio);
+    const line_gap: i32 = @max(1, @as(i32, @intFromFloat(rect.height * style.layout.cursor_readout_line_gap_ratio)));
+
+    var time_buf: [64]u8 = undefined;
+    const time_text = std.fmt.bufPrintZ(&time_buf, "t={d:.2}s", .{x_value}) catch return;
+    rl.drawText(time_text, origin_x, origin_y, font, style.palette.tick);
+
+    for (series, 0..) |s, i| {
+        const y = origin_y + @as(i32, @intCast(i + 1)) * line_gap;
+        var line_buf: [128]u8 = undefined;
+        if (!s.available) {
+            const line = std.fmt.bufPrintZ(&line_buf, "{s}: n/a", .{s.label}) catch continue;
+            rl.drawText(line, origin_x, y, font, style.palette.empty_text);
+            continue;
+        }
+
+        const value = sampleAtCursor(s, x_value, x_domain, relative) orelse {
+            const line = std.fmt.bufPrintZ(&line_buf, "{s}: n/a", .{s.label}) catch continue;
+            rl.drawText(line, origin_x, y, font, style.palette.empty_text);
+            continue;
+        };
+        const line = std.fmt.bufPrintZ(&line_buf, "{s}: {d:.2}", .{ s.label, value }) catch continue;
+        rl.drawText(line, origin_x, y, font, s.color);
+    }
+}
+
+fn sampleAtCursor(s: SeriesDef, x_value: f64, x_domain: AxisDomain, relative: bool) ?f32 {
+    const latest_ts = s.history.latestTimestamp() orelse return null;
+    var best: ?f32 = null;
+    var best_dist = std.math.inf(f64);
+
+    for (0..s.history.len) |i| {
+        const sample = s.history.sample(i);
+        const sx = if (relative) sample.timestamp - latest_ts else sample.timestamp;
+        if (sx < x_domain.min or sx > x_domain.max) continue;
+        const dist = @abs(sx - x_value);
+        if (dist < best_dist) {
+            best_dist = dist;
+            best = s.history.value(i, s.kind);
+        }
+    }
+    return best;
 }
 
 fn drawLegend(rect: rl.Rectangle, series: []const SeriesDef, style: PlotStyle, min_dim: f32) void {

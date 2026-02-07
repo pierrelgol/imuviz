@@ -56,6 +56,12 @@ pub const plot = struct {
     pub const border_ratio: f32 = 0.006;
     pub const grid_ratio: f32 = 0.004;
     pub const trace_ratio: f32 = 0.007;
+    pub const cursor_line_ratio: f32 = 0.006;
+    pub const cursor_readout_offset_ratio: f32 = 0.020;
+    pub const cursor_readout_line_gap_ratio: f32 = 0.080;
+    pub const cursor_readout_size_ratio: f32 = 0.038;
+    pub const cursor_column_right_gap_ratio: f32 = 0.012;
+    pub const cursor_column_fill = color(10, 13, 18, 210);
 };
 
 pub const window_initial_width: i32 = 1600;

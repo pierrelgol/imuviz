@@ -5,6 +5,7 @@ const ui = @import("ui.zig");
 const net = @import("network.zig");
 const plotting = @import("plotting.zig");
 const scene3d = @import("scene3d.zig");
+const cursor = @import("cursor.zig");
 const History = @import("history.zig").History;
 const drawTextFmt = @import("utils.zig").drawTextFmt;
 
@@ -16,6 +17,7 @@ pub const DeviceFrame = struct {
 
 pub const Renderer = struct {
     scenes: [cfg.max_hosts]scene3d.SceneTarget = [_]scene3d.SceneTarget{.{}} ** cfg.max_hosts,
+    shared_cursor: cursor.SharedCursor = .{},
     root_layout_options: ui.RootLayoutOptions = .{},
     comparison_layout_options: ui.ComparisonLayoutOptions = .{},
 
@@ -38,7 +40,8 @@ pub const Renderer = struct {
             drawSceneCard(&self.scenes[i], cmp.scenes[i], root.scale, device);
         }
 
-        drawSharedPlots(cmp.plots, devices[0..draw_count]);
+        self.shared_cursor.update(cmp.plots);
+        drawSharedPlots(cmp.plots, devices[0..draw_count], self.shared_cursor);
     }
 };
 
@@ -120,13 +123,13 @@ fn drawCurrentValues(card_rect: rl.Rectangle, history: *const History) void {
     );
 }
 
-fn drawSharedPlots(plot_rects: [cfg.ui.chart_count]rl.Rectangle, devices: []const DeviceFrame) void {
-    drawComparisonPlot(plot_rects[0], devices, .accel_x, "accel_x", .{ .fixed = .{ .min = cfg.plot.accel_min, .max = cfg.plot.accel_max } }, .fixed0, rl.Color.red);
-    drawComparisonPlot(plot_rects[1], devices, .accel_y, "accel_y", .{ .fixed = .{ .min = cfg.plot.accel_min, .max = cfg.plot.accel_max } }, .fixed0, rl.Color.green);
-    drawComparisonPlot(plot_rects[2], devices, .accel_z, "accel_z", .{ .fixed = .{ .min = cfg.plot.accel_min, .max = cfg.plot.accel_max } }, .fixed0, rl.Color.blue);
-    drawComparisonPlot(plot_rects[3], devices, .gyro_norm, "gyro_norm", .{ .fixed = .{ .min = cfg.plot.gyro_norm_min, .max = cfg.plot.gyro_norm_max } }, .fixed0, cfg.renderer.trace_gyro_norm);
-    drawComparisonPlot(plot_rects[4], devices, .elevation, "elevation", .{ .fixed = .{ .min = cfg.plot.elevation_min_deg, .max = cfg.plot.elevation_max_deg } }, .fixed0, rl.Color.orange);
-    drawComparisonPlot(plot_rects[5], devices, .bearing, "bearing", .{ .fixed = .{ .min = cfg.plot.orientation_min_deg, .max = cfg.plot.orientation_max_deg } }, .fixed0, rl.Color.sky_blue);
+fn drawSharedPlots(plot_rects: [cfg.ui.chart_count]rl.Rectangle, devices: []const DeviceFrame, shared_cursor: cursor.SharedCursor) void {
+    drawComparisonPlot(plot_rects[0], devices, .accel_x, "accel_x", .{ .fixed = .{ .min = cfg.plot.accel_min, .max = cfg.plot.accel_max } }, .fixed0, rl.Color.red, shared_cursor);
+    drawComparisonPlot(plot_rects[1], devices, .accel_y, "accel_y", .{ .fixed = .{ .min = cfg.plot.accel_min, .max = cfg.plot.accel_max } }, .fixed0, rl.Color.green, shared_cursor);
+    drawComparisonPlot(plot_rects[2], devices, .accel_z, "accel_z", .{ .fixed = .{ .min = cfg.plot.accel_min, .max = cfg.plot.accel_max } }, .fixed0, rl.Color.blue, shared_cursor);
+    drawComparisonPlot(plot_rects[3], devices, .gyro_norm, "gyro_norm", .{ .fixed = .{ .min = cfg.plot.gyro_norm_min, .max = cfg.plot.gyro_norm_max } }, .fixed0, cfg.renderer.trace_gyro_norm, shared_cursor);
+    drawComparisonPlot(plot_rects[4], devices, .elevation, "elevation", .{ .fixed = .{ .min = cfg.plot.elevation_min_deg, .max = cfg.plot.elevation_max_deg } }, .fixed0, rl.Color.orange, shared_cursor);
+    drawComparisonPlot(plot_rects[5], devices, .bearing, "bearing", .{ .fixed = .{ .min = cfg.plot.orientation_min_deg, .max = cfg.plot.orientation_max_deg } }, .fixed0, rl.Color.sky_blue, shared_cursor);
 }
 
 fn drawComparisonPlot(
@@ -137,6 +140,7 @@ fn drawComparisonPlot(
     y_domain: plotting.YDomain,
     y_format: plotting.LabelFormat,
     base_color: rl.Color,
+    shared_cursor: cursor.SharedCursor,
 ) void {
     if (!isDrawableRect(rect)) return;
 
@@ -148,6 +152,7 @@ fn drawComparisonPlot(
             .kind = kind,
             .label = devices[i].title,
             .color = shadeForDevice(base_color, i, n),
+            .available = devices[i].snapshot.state == .connected,
         };
     }
 
@@ -164,6 +169,7 @@ fn drawComparisonPlot(
             .show_y_axis_label = false,
             .show_legend = n > 1,
             .y_domain = y_domain,
+            .cursor_x_norm = if (shared_cursor.active) shared_cursor.x_norm else null,
         },
         .{},
     );
