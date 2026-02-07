@@ -95,6 +95,31 @@ pub const renderer = struct {
     pub const trace_gyro_norm = color(230, 126, 247, 255);
 };
 
+pub const ui = struct {
+    pub const chart_count: usize = 6;
+
+    pub const screen_ref_min: f32 = 10.0;
+
+    pub const margin_ratio: f32 = 0.010;
+    pub const margin_min: f32 = 10.0;
+    pub const gap_ratio: f32 = 0.008;
+    pub const gap_min: f32 = 8.0;
+    pub const title_height_ratio: f32 = 0.030;
+    pub const title_height_min: f32 = 34.0;
+    pub const panel_header_height_ratio: f32 = 0.028;
+    pub const panel_header_height_min: f32 = 28.0;
+    pub const panel_padding_ratio: f32 = 0.006;
+    pub const panel_padding_min: f32 = 5.0;
+
+    pub const scene_ratio_wide: f32 = 0.34;
+    pub const scene_ratio_narrow: f32 = 0.30;
+    pub const scene_ratio_breakpoint_px: f32 = 1400.0;
+    pub const scene_width_padding_scale: f32 = 1.5;
+    pub const charts_gap_scale: f32 = 0.7;
+
+    pub const charts_two_column_width_height_ratio: f32 = 0.9;
+};
+
 pub const scene3d = struct {
     pub const camera_pos: rl.Vector3 = .{ .x = 2.9, .y = 2.35, .z = 2.9 };
     pub const camera_target: rl.Vector3 = .{ .x = 0.0, .y = 0.55, .z = 0.0 };

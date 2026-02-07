@@ -63,6 +63,8 @@ const SceneTarget = struct {
 
 pub const Renderer = struct {
     scenes: [cfg.max_hosts]SceneTarget = [_]SceneTarget{.{}} ** cfg.max_hosts,
+    root_layout_options: ui.RootLayoutOptions = .{},
+    panel_layout_options: ui.PanelLayoutOptions = .{},
 
     pub fn deinit(self: *Renderer) void {
         for (&self.scenes) |*scene| scene.deinit();
@@ -73,14 +75,14 @@ pub const Renderer = struct {
         const screen_h = rl.getScreenHeight();
         const draw_count = @min(devices.len, self.scenes.len);
 
-        const layout = ui.computeRootLayout(screen_w, screen_h);
+        const layout = ui.computeRootLayout(screen_w, screen_h, self.root_layout_options);
         rl.clearBackground(cfg.theme.background);
         drawTitleBar(layout.title, draw_count);
 
         for (devices[0..draw_count], 0..) |device, idx| {
             const panel = ui.panelRect(layout.body, draw_count, idx, layout.scale.gap);
             if (!isDrawableRect(panel)) continue;
-            drawDevicePanel(&self.scenes[idx], panel, layout.scale, device);
+            drawDevicePanel(&self.scenes[idx], panel, layout.scale, self.panel_layout_options, device);
         }
     }
 };
@@ -98,13 +100,19 @@ fn drawTitleBar(title_rect: rl.Rectangle, device_count: usize) void {
     );
 }
 
-fn drawDevicePanel(scene_target: *SceneTarget, panel: rl.Rectangle, scale: ui.UiScale, device: DeviceFrame) void {
+fn drawDevicePanel(
+    scene_target: *SceneTarget,
+    panel: rl.Rectangle,
+    scale: ui.UiScale,
+    panel_layout_options: ui.PanelLayoutOptions,
+    device: DeviceFrame,
+) void {
     rl.drawRectangleRec(panel, cfg.theme.frame_panel);
     rl.drawRectangleLinesEx(panel, cfg.renderer.panel_border_thickness, cfg.renderer.panel_border);
 
     drawPanelHeader(panel, scale, device);
 
-    const content = ui.splitDevicePanel(panel, scale);
+    const content = ui.splitDevicePanel(panel, scale, panel_layout_options);
     drawScenePanel(scene_target, content.scene, device.history);
     drawSignalPlots(content, device.history);
     drawCurrentValues(panel, device.history);

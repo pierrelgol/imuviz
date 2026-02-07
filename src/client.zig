@@ -128,7 +128,33 @@ pub fn main(init: std.process.Init) !void {
     rl.setTargetFPS(cfg.target_fps);
 
     var histories: [cfg.max_hosts]History = [_]History{.{}} ** cfg.max_hosts;
-    var renderer: Renderer = .{};
+    var renderer: Renderer = .{
+        .root_layout_options = .{
+            .scale_policy = .{
+                .base_min = cfg.ui.screen_ref_min,
+                .margin_ratio = cfg.ui.margin_ratio,
+                .margin_min = cfg.ui.margin_min,
+                .gap_ratio = cfg.ui.gap_ratio,
+                .gap_min = cfg.ui.gap_min,
+                .title_height_ratio = cfg.ui.title_height_ratio,
+                .title_height_min = cfg.ui.title_height_min,
+                .panel_header_height_ratio = cfg.ui.panel_header_height_ratio,
+                .panel_header_height_min = cfg.ui.panel_header_height_min,
+                .panel_padding_ratio = cfg.ui.panel_padding_ratio,
+                .panel_padding_min = cfg.ui.panel_padding_min,
+            },
+        },
+        .panel_layout_options = .{
+            .scene_ratio_wide = cfg.ui.scene_ratio_wide,
+            .scene_ratio_narrow = cfg.ui.scene_ratio_narrow,
+            .scene_ratio_breakpoint_px = cfg.ui.scene_ratio_breakpoint_px,
+            .scene_width_padding_scale = cfg.ui.scene_width_padding_scale,
+            .charts_gap_scale = cfg.ui.charts_gap_scale,
+            .chart_grid = .{
+                .two_column_width_height_ratio = cfg.ui.charts_two_column_width_height_ratio,
+            },
+        },
+    };
     defer renderer.deinit();
 
     var drain_buffer: [cfg.drain_batch_size]@import("common").Report = undefined;
