@@ -35,10 +35,10 @@ pub const Renderer = struct {
         const cmp = ui.splitComparison(root.body, root.scale, draw_count, self.comparison_layout_options);
 
         rl.clearBackground(cfg.theme.background);
-        drawTitleBar(root.title, draw_count);
+        drawTitleBar(root.title, draw_count, options.show_fps);
 
         for (devices[0..draw_count], 0..) |device, i| {
-            drawSceneCard(&self.scenes[i], cmp.scenes[i], root.scale, device);
+            drawSceneCard(&self.scenes[i], cmp.scenes[i], root.scale, device, options);
         }
 
         self.shared_cursor.update(cmp.plots);
@@ -46,7 +46,7 @@ pub const Renderer = struct {
     }
 };
 
-fn drawTitleBar(title_rect: rl.Rectangle, device_count: usize) void {
+fn drawTitleBar(title_rect: rl.Rectangle, device_count: usize, show_fps: bool) void {
     rl.drawRectangleRec(title_rect, cfg.theme.title_panel);
     rl.drawRectangleLinesEx(title_rect, cfg.renderer.panel_border_thickness, cfg.renderer.title_border);
     drawTextFmt(
@@ -57,7 +57,7 @@ fn drawTitleBar(title_rect: rl.Rectangle, device_count: usize) void {
         cfg.renderer.panel_title_size,
         cfg.theme.text_primary,
     );
-    drawFpsTopRight(title_rect);
+    if (show_fps) drawFpsTopRight(title_rect);
 }
 
 fn drawFpsTopRight(title_rect: rl.Rectangle) void {
@@ -70,7 +70,7 @@ fn drawFpsTopRight(title_rect: rl.Rectangle) void {
     rl.drawText(fps_text, x, y, font_size, cfg.theme.text_secondary);
 }
 
-fn drawSceneCard(target: *scene3d.SceneTarget, rect: rl.Rectangle, scale: ui.UiScale, device: DeviceFrame) void {
+fn drawSceneCard(target: *scene3d.SceneTarget, rect: rl.Rectangle, scale: ui.UiScale, device: DeviceFrame, options: options_mod.RuntimeOptions) void {
     if (!isDrawableRect(rect)) return;
 
     rl.drawRectangleRec(rect, cfg.theme.frame_panel);
@@ -89,14 +89,16 @@ fn drawSceneCard(target: *scene3d.SceneTarget, rect: rl.Rectangle, scale: ui.UiS
 
     const status = statusMeta(device.snapshot.state);
     const status_y = header_top + @as(f32, @floatFromInt(cfg.renderer.panel_title_size)) + 2.0;
-    drawTextFmt(
-        "{s} | Parse:{} ConnFail:{} Disc:{} Reconn:{}",
-        .{ status.text, device.snapshot.parse_errors, device.snapshot.connect_failures, device.snapshot.disconnects, device.snapshot.reconnects },
-        @intFromFloat(rect.x + pad),
-        @intFromFloat(status_y),
-        cfg.renderer.status_text_size,
-        status.color,
-    );
+    if (options.show_status_line) {
+        drawTextFmt(
+            "{s} | Parse:{} ConnFail:{} Disc:{} Reconn:{}",
+            .{ status.text, device.snapshot.parse_errors, device.snapshot.connect_failures, device.snapshot.disconnects, device.snapshot.reconnects },
+            @intFromFloat(rect.x + pad),
+            @intFromFloat(status_y),
+            cfg.renderer.status_text_size,
+            status.color,
+        );
+    }
 
     const scene_y = status_y + @as(f32, @floatFromInt(cfg.renderer.status_text_size)) + pad;
     const values_h = @as(f32, @floatFromInt(cfg.renderer.current_values_size)) + pad;
@@ -106,9 +108,14 @@ fn drawSceneCard(target: *scene3d.SceneTarget, rect: rl.Rectangle, scale: ui.UiS
         .width = @max(1.0, rect.width - pad * 2.0),
         .height = @max(1.0, rect.height - (scene_y - rect.y) - values_h),
     };
-    scene3d.draw(target, scene_rect, device.history);
+    if (options.show_scene) {
+        scene3d.draw(target, scene_rect, device.history);
+    } else {
+        rl.drawRectangleRec(scene_rect, cfg.theme.background);
+        rl.drawRectangleLinesEx(scene_rect, cfg.renderer.panel_border_thickness, cfg.renderer.panel_border);
+    }
 
-    drawCurrentValues(rect, device.history);
+    if (options.show_current_values) drawCurrentValues(rect, device.history);
 }
 
 fn drawCurrentValues(card_rect: rl.Rectangle, history: *const History) void {
@@ -125,12 +132,12 @@ fn drawCurrentValues(card_rect: rl.Rectangle, history: *const History) void {
 }
 
 fn drawSharedPlots(plot_rects: [cfg.ui.chart_count]rl.Rectangle, devices: []const DeviceFrame, shared_cursor: cursor.SharedCursor, options: options_mod.RuntimeOptions) void {
-    drawComparisonPlot(plot_rects[0], 0, devices, .accel_x, "accel_x", .{ .fixed = .{ .min = cfg.plot.accel_min, .max = cfg.plot.accel_max } }, .fixed0, rl.Color.red, shared_cursor, options, .{ .warn_abs = options.tolerance_accel_warn_abs, .fail_abs = options.tolerance_accel_fail_abs, .basis = toleranceBasisFromOptions(options) });
-    drawComparisonPlot(plot_rects[1], 1, devices, .accel_y, "accel_y", .{ .fixed = .{ .min = cfg.plot.accel_min, .max = cfg.plot.accel_max } }, .fixed0, rl.Color.green, shared_cursor, options, .{ .warn_abs = options.tolerance_accel_warn_abs, .fail_abs = options.tolerance_accel_fail_abs, .basis = toleranceBasisFromOptions(options) });
-    drawComparisonPlot(plot_rects[2], 2, devices, .accel_z, "accel_z", .{ .fixed = .{ .min = cfg.plot.accel_min, .max = cfg.plot.accel_max } }, .fixed0, rl.Color.blue, shared_cursor, options, .{ .warn_abs = options.tolerance_accel_warn_abs, .fail_abs = options.tolerance_accel_fail_abs, .basis = toleranceBasisFromOptions(options) });
-    drawComparisonPlot(plot_rects[3], 3, devices, .gyro_norm, "gyro_norm", .{ .fixed = .{ .min = cfg.plot.gyro_norm_min, .max = cfg.plot.gyro_norm_max } }, .fixed0, cfg.renderer.trace_gyro_norm, shared_cursor, options, .{ .warn_abs = options.tolerance_gyro_warn_abs, .fail_abs = options.tolerance_gyro_fail_abs, .basis = toleranceBasisFromOptions(options) });
-    drawComparisonPlot(plot_rects[4], 4, devices, .elevation, "elevation", .{ .fixed = .{ .min = cfg.plot.elevation_min_deg, .max = cfg.plot.elevation_max_deg } }, .fixed0, rl.Color.orange, shared_cursor, options, .{ .warn_abs = options.tolerance_elevation_warn_abs, .fail_abs = options.tolerance_elevation_fail_abs, .basis = toleranceBasisFromOptions(options) });
-    drawComparisonPlot(plot_rects[5], 5, devices, .bearing, "bearing", .{ .fixed = .{ .min = cfg.plot.orientation_min_deg, .max = cfg.plot.orientation_max_deg } }, .fixed0, rl.Color.sky_blue, shared_cursor, options, .{ .warn_abs = options.tolerance_bearing_warn_abs, .fail_abs = options.tolerance_bearing_fail_abs, .basis = toleranceBasisFromOptions(options) });
+    drawComparisonPlot(plot_rects[0], 0, devices, .accel_x, "accel_x", .{ .fixed = .{ .min = cfg.plot.accel_min, .max = cfg.plot.accel_max } }, .fixed0, rl.Color.red, options.show_accel_x_plot, shared_cursor, options, .{ .warn_abs = options.tolerance_accel_warn_abs, .fail_abs = options.tolerance_accel_fail_abs, .basis = toleranceBasisFromOptions(options) });
+    drawComparisonPlot(plot_rects[1], 1, devices, .accel_y, "accel_y", .{ .fixed = .{ .min = cfg.plot.accel_min, .max = cfg.plot.accel_max } }, .fixed0, rl.Color.green, options.show_accel_y_plot, shared_cursor, options, .{ .warn_abs = options.tolerance_accel_warn_abs, .fail_abs = options.tolerance_accel_fail_abs, .basis = toleranceBasisFromOptions(options) });
+    drawComparisonPlot(plot_rects[2], 2, devices, .accel_z, "accel_z", .{ .fixed = .{ .min = cfg.plot.accel_min, .max = cfg.plot.accel_max } }, .fixed0, rl.Color.blue, options.show_accel_z_plot, shared_cursor, options, .{ .warn_abs = options.tolerance_accel_warn_abs, .fail_abs = options.tolerance_accel_fail_abs, .basis = toleranceBasisFromOptions(options) });
+    drawComparisonPlot(plot_rects[3], 3, devices, .gyro_norm, "gyro_norm", .{ .fixed = .{ .min = cfg.plot.gyro_norm_min, .max = cfg.plot.gyro_norm_max } }, .fixed0, cfg.renderer.trace_gyro_norm, options.show_gyro_norm_plot, shared_cursor, options, .{ .warn_abs = options.tolerance_gyro_warn_abs, .fail_abs = options.tolerance_gyro_fail_abs, .basis = toleranceBasisFromOptions(options) });
+    drawComparisonPlot(plot_rects[4], 4, devices, .elevation, "elevation", .{ .fixed = .{ .min = cfg.plot.elevation_min_deg, .max = cfg.plot.elevation_max_deg } }, .fixed0, rl.Color.orange, options.show_elevation_plot, shared_cursor, options, .{ .warn_abs = options.tolerance_elevation_warn_abs, .fail_abs = options.tolerance_elevation_fail_abs, .basis = toleranceBasisFromOptions(options) });
+    drawComparisonPlot(plot_rects[5], 5, devices, .bearing, "bearing", .{ .fixed = .{ .min = cfg.plot.orientation_min_deg, .max = cfg.plot.orientation_max_deg } }, .fixed0, rl.Color.sky_blue, options.show_bearing_plot, shared_cursor, options, .{ .warn_abs = options.tolerance_bearing_warn_abs, .fail_abs = options.tolerance_bearing_fail_abs, .basis = toleranceBasisFromOptions(options) });
 }
 
 fn drawComparisonPlot(
@@ -142,6 +149,7 @@ fn drawComparisonPlot(
     y_domain: plotting.YDomain,
     y_format: plotting.LabelFormat,
     base_color: rl.Color,
+    plot_visible: bool,
     shared_cursor: cursor.SharedCursor,
     options: options_mod.RuntimeOptions,
     tolerance: plotting.ToleranceOptions,
@@ -157,19 +165,20 @@ fn drawComparisonPlot(
             .kind = kind,
             .label = deviceSeriesLabel(i),
             .color = shadeForDevice(base_color, i, n),
+            .render_enabled = plot_visible,
             .available = devices[i].snapshot.state == .connected,
         };
         series_count += 1;
     }
-    if (cfg.plot.show_delta_series and n >= 2) {
+    if (n >= 2) {
         series_buffer[series_count] = .{
             .history = devices[0].history,
             .rhs_history = devices[1].history,
             .kind = kind,
             .label = "d",
             .color = cfg.renderer.delta_trace,
+            .render_enabled = plot_visible and options.show_delta_series,
             .available = devices[0].snapshot.state == .connected and devices[1].snapshot.state == .connected,
-            .render_enabled = options.show_delta_series,
         };
         series_count += 1;
     }
@@ -186,6 +195,9 @@ fn drawComparisonPlot(
             .show_x_axis_label = false,
             .show_y_axis_label = false,
             .show_legend = options.show_legend and series_count > 1,
+            .show_grid = options.show_plot_grid,
+            .show_axes = options.show_plot_axes,
+            .show_traces = options.show_plot_traces,
             .y_domain = y_domain,
             .cursor_x_norm = if (options.show_cursor and shared_cursor.active) shared_cursor.x_norm else null,
             .show_stats_panel = options.show_stats_panel,

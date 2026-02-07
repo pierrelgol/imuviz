@@ -35,6 +35,9 @@ pub const PlotOptions = struct {
     show_x_axis_label: bool = false,
     show_y_axis_label: bool = false,
     show_legend: bool = true,
+    show_grid: bool = true,
+    show_axes: bool = true,
+    show_traces: bool = true,
     empty_message: []const u8 = "Waiting for data...",
     min_samples: usize = cfg.plot.min_samples,
     y_domain: YDomain = .dynamic,
@@ -179,17 +182,23 @@ pub fn drawPlot(rect: rl.Rectangle, options: PlotOptions, style: PlotStyle) void
         return;
     }
 
-    drawGrid(chart_rect, options.x_axis.graduation_count, options.y_axis.graduation_count, style, min_dim);
+    if (options.show_grid) {
+        drawGrid(chart_rect, options.x_axis.graduation_count, options.y_axis.graduation_count, style, min_dim);
+    }
     if (options.show_tolerance) {
         if (options.tolerance) |tol| drawToleranceOverlay(chart_rect, y_domain, tol, tolerance_state orelse .na, style, min_dim);
     }
-    drawAxisGraduations(.x, chart_rect, x_domain, options.x_axis, style, min_dim);
-    drawAxisGraduations(.y, chart_rect, y_domain, options.y_axis, style, min_dim);
-    drawAxisLabels(rect, chart_rect, options, style, min_dim);
+    if (options.show_axes) {
+        drawAxisGraduations(.x, chart_rect, x_domain, options.x_axis, style, min_dim);
+        drawAxisGraduations(.y, chart_rect, y_domain, options.y_axis, style, min_dim);
+        drawAxisLabels(rect, chart_rect, options, style, min_dim);
+    }
 
-    drawSeries(options.series, chart_rect, x_domain, y_domain, options.x_labels_relative_to_latest, style, min_dim);
-    if (options.cursor_x_norm) |cursor_x| {
-        drawCursorLine(chart_rect, cursor_x, style, min_dim);
+    if (options.show_traces) {
+        drawSeries(options.series, chart_rect, x_domain, y_domain, options.x_labels_relative_to_latest, style, min_dim);
+        if (options.cursor_x_norm) |cursor_x| {
+            drawCursorLine(chart_rect, cursor_x, style, min_dim);
+        }
     }
 
     if (options.show_legend) drawLegend(rect, options.series, style, min_dim);
