@@ -126,6 +126,7 @@ pub fn main(init: std.process.Init) !void {
     rl.setConfigFlags(.{ .window_resizable = true, .msaa_4x_hint = true });
     rl.initWindow(cfg.window_initial_width, cfg.window_initial_height, "IMU Visualizer");
     rl.setWindowMinSize(cfg.window_min_width, cfg.window_min_height);
+    rl.setExitKey(.q);
     defer rl.closeWindow();
     rl.setTargetFPS(cfg.target_fps);
 
